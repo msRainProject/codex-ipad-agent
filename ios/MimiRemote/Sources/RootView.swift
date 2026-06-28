@@ -172,7 +172,7 @@ struct RootView: View {
             ProjectSidebarView(showsSessions: true)
                 // 侧栏本身用 Section header 呈现“项目”，隐藏大标题可以让项目树首屏更紧凑。
                 .toolbar(.hidden, for: .navigationBar)
-                // 侧栏宽度跟随窗口缩放，iPad mini/浮窗不会把详情区挤到只剩一条窄缝。
+                // 侧栏宽度跟随窗口缩放，iPhone、iPad mini 和浮窗不会把详情区挤到只剩一条窄缝。
                 .navigationSplitViewColumnWidth(
                     min: layout.projectColumn.min,
                     ideal: layout.projectColumn.ideal,
@@ -357,7 +357,7 @@ struct RootView: View {
     }
 }
 
-private struct WorkbenchLayout: Equatable {
+struct WorkbenchLayout: Equatable {
     struct ColumnWidth: Equatable {
         let min: CGFloat
         let ideal: CGFloat
@@ -377,7 +377,8 @@ private struct WorkbenchLayout: Equatable {
 
         if isCompactWidth {
             projectColumn = ColumnWidth(min: 220, ideal: 260, max: 300)
-            titleMaxWidth = 180
+            // 手机导航栏同时有返回、连接状态、日志和设置按钮；标题必须主动让位，避免挤压工具按钮。
+            titleMaxWidth = max(86, min(150, containerWidth - 250))
         } else if isTightPadWidth {
             projectColumn = ColumnWidth(min: 240, ideal: 280, max: 320)
             titleMaxWidth = 240
@@ -404,6 +405,7 @@ private extension View {
 }
 
 private struct SessionInspectorPresentation: ViewModifier {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Binding var isPresented: Bool
     let layout: WorkbenchLayout
 
@@ -430,7 +432,7 @@ private struct SessionInspectorPresentation: ViewModifier {
                             }
                         }
                 }
-                .presentationDetents([.medium, .large])
+                .presentationDetents(horizontalSizeClass == .compact ? [.large] : [.medium, .large])
                 .presentationDragIndicator(.visible)
             }
         }

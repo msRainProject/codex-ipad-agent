@@ -2,9 +2,9 @@
 
 ## 目标
 
-Mimi Remote 是一个原生 iPad 控制台，用来连接用户自己 Mac 上运行的 `agentd`。仓库、Go module 和后端 formula 统一使用 `mimi-remote`，用户侧产品名统一使用 `Mimi Remote`。
+Mimi Remote 是一个原生 iPhone / iPad 控制台，用来连接用户自己 Mac 上运行的 `agentd`。仓库、Go module 和后端 formula 统一使用 `mimi-remote`，用户侧产品名统一使用 `Mimi Remote`。
 
-在 Mac 上启动一个单机 `agentd` 控制面，让 iPad 原生 App 通过 Tailscale 选择本机项目，并直接使用 Codex app-server JSON-RPC 协议远程运行用户自己的本机开发环境。核心目标是减少“每个项目都要手动启动服务”的重复操作，同时避免 Go 后端长期维护一套自定义 Codex 业务协议。
+在 Mac 上启动一个单机 `agentd` 控制面，让 iPhone / iPad 原生 App 通过 Tailscale 选择本机项目，并直接使用 Codex app-server JSON-RPC 协议远程运行用户自己的本机开发环境。核心目标是减少“每个项目都要手动启动服务”的重复操作，同时避免 Go 后端长期维护一套自定义 Codex 业务协议。
 
 ## 项目边界
 
@@ -19,7 +19,7 @@ Mimi Remote 是一个原生 iPad 控制台，用来连接用户自己 Mac 上运
 目标架构：
 
 ```text
-iPad 原生 App
+iPhone / iPad 原生 App
   |
   | WebSocket + app-server JSON-RPC
   | Authorization: Bearer <AGENTD_TOKEN>
@@ -40,7 +40,7 @@ Codex core / 本机凭证 / 项目目录
 安全边界：
 
 - `agentd` 运行在开发机本地，Codex 凭证不离开开发机。
-- iPad 原生 App 从 `agentd` 获取项目 allowlist，只能使用配置中的项目路径。
+- iPhone / iPad 原生 App 从 `agentd` 获取项目 allowlist，只能使用配置中的项目路径。
 - `browse_roots`（默认用户 Home，不开放 `/`）只扩大“目录浏览 + 打开 workspace”的范围，不参与项目发现；browse workspace 的会话被绑定到打开时的具体目录（canonical 路径），`turn/start` 切到同根下其他目录会被 gateway 拒绝。
 - direct app-server 请求必须使用远程安全默认值：`approvalPolicy=on-request`、`workspace-write` sandbox、默认禁网。
 - API、control-plane 和 gateway 都需要 Bearer Token。
@@ -50,8 +50,8 @@ Codex core / 本机凭证 / 项目目录
 已下线旧路径：
 
 - `/api/sessions*` REST、`/api/sessions/{id}/ws` 和内置 Web/PWA 静态站点已经删除。
-- iPad 原生 App 只通过 `/api/projects`、`/api/workspaces/resolve`、`/api/directories/list`、`/api/app-server/config` 和 `/api/app-server/ws` 工作。
-- 浏览器/Safari 入口不再维护；需要远程使用时请安装原生 iPad App，并通过 Tailscale 访问 `agentd`。
+- iPhone / iPad 原生 App 只通过 `/api/projects`、`/api/workspaces/resolve`、`/api/directories/list`、`/api/app-server/config` 和 `/api/app-server/ws` 工作。
+- 浏览器/Safari 入口不再维护；需要远程使用时请安装原生 iPhone / iPad App，并通过 Tailscale 访问 `agentd`。
 
 ## 实现
 
@@ -165,7 +165,7 @@ cd "$HOME/code/mimi-remote"
 go build -o bin/agentd ./cmd/agentd
 ```
 
-### 1.3 构建原生 iPad App
+### 1.3 构建原生 iOS App
 
 原生 App 工程位于：
 

@@ -2230,9 +2230,18 @@ struct CodexAppServerRequestBuilder {
         if normalizedDangerToken(params["approvalPolicy"]??.stringValue) == "never" {
             throw CodexAppServerRequestBuilderError.unsafeParameter("approvalPolicy=never 被禁止")
         }
+        if normalizedDangerToken(params["sandbox"]??.stringValue) == "dangerfullaccess" ||
+            normalizedDangerToken(params["sandboxMode"]??.stringValue) == "dangerfullaccess" ||
+            normalizedDangerToken(params["sandbox_mode"]??.stringValue) == "dangerfullaccess" {
+            throw CodexAppServerRequestBuilderError.unsafeParameter("远程不允许 danger-full-access")
+        }
         try validateNoDangerousConfig(params["config"] ?? nil)
         guard let sandbox = params["sandboxPolicy"]??.objectValue else {
             return
+        }
+        // 远程 app-server 只允许受控沙箱，避免 iOS 端把本机 full-access 权限透传到 Mac。
+        if normalizedDangerToken(sandbox["type"]?.stringValue) == "dangerfullaccess" {
+            throw CodexAppServerRequestBuilderError.unsafeParameter("远程不允许 danger-full-access")
         }
         if sandbox["networkAccess"]?.boolValue == true {
             throw CodexAppServerRequestBuilderError.unsafeParameter("远程默认禁止网络访问")
@@ -2241,7 +2250,7 @@ struct CodexAppServerRequestBuilder {
         if writableRoots.contains(where: { $0 != projectPath }) {
             throw CodexAppServerRequestBuilderError.unsafeParameter("writableRoots 只能包含当前 allowlist 项目")
         }
-        let inputPaths = try collectUserInputPaths(params["input"] ?? nil)
+        let inputPaths = try collectWorkspaceInputPaths(params["input"] ?? nil)
         if inputPaths.contains(where: { !isPathInAllowlist($0) }) {
             throw CodexAppServerRequestBuilderError.unsafeParameter("结构化输入路径必须来自当前 allowlist 项目")
         }
@@ -2255,7 +2264,7 @@ struct CodexAppServerRequestBuilder {
             .replacingOccurrences(of: "_", with: "")
     }
 
-    private func collectUserInputPaths(_ input: CodexAppServerJSONValue?) throws -> [String] {
+    private func collectWorkspaceInputPaths(_ input: CodexAppServerJSONValue?) throws -> [String] {
         guard let items = input?.arrayValue else {
             return []
         }
@@ -2266,11 +2275,17 @@ struct CodexAppServerRequestBuilder {
             }
             let type = object["type"]?.stringValue ?? ""
             switch type {
-            case "localImage", "skill", "mention":
+            case "localImage", "mention":
                 guard let path = object["path"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else {
                     throw CodexAppServerRequestBuilderError.unsafeParameter("turn/start.input.\(type).path 不能为空")
                 }
                 paths.append(path)
+            case "skill":
+                // Skill 可能来自用户级 / 管理员级 skill root 或插件缓存，不一定在当前项目 allowlist 内。
+                // 这里只校验字段完整性；skill root 的来源可信度由 agentd capabilities / app-server 负责。
+                guard let path = object["path"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else {
+                    throw CodexAppServerRequestBuilderError.unsafeParameter("turn/start.input.skill.path 不能为空")
+                }
             case "image":
                 let url = object["url"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 guard !url.isEmpty else {

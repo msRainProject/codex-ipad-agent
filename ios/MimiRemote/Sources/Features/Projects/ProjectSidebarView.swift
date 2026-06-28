@@ -5,6 +5,7 @@ struct ProjectSidebarView: View {
     @EnvironmentObject private var sessionStore: SessionStore
     @EnvironmentObject private var themeStore: ThemeStore
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var isPresentingOpenWorkspace = false
     @State private var isPresentingWorktreeManager = false
     @State private var worktreeManagerRootProjectID = ""
@@ -93,7 +94,7 @@ struct ProjectSidebarView: View {
         .contentMargins(.bottom, 12, for: .scrollContent)
         .scrollContentBackground(.hidden)
         .background(tokens.background)
-        .searchable(text: $sessionStore.sessionSearchQuery, placement: .sidebar, prompt: "搜索会话")
+        .searchable(text: $sessionStore.sessionSearchQuery, placement: searchPlacement, prompt: "搜索会话")
         .sheet(isPresented: $isPresentingOpenWorkspace) {
             OpenWorkspaceSheet()
         }
@@ -125,6 +126,11 @@ struct ProjectSidebarView: View {
                 )
             }
         }
+    }
+
+    private var searchPlacement: SearchFieldPlacement {
+        // iPhone 没有真正的 sidebar 搜索区，放到导航栏抽屉里才是系统原生的窄屏入口。
+        horizontalSizeClass == .compact ? .navigationBarDrawer(displayMode: .automatic) : .sidebar
     }
 }
 

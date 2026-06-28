@@ -555,7 +555,11 @@ actor CodexAppServerSessionRuntime {
         // hydration。移动端打开会话也要先绑定当前连接，否则历史里的 pending approval 和后续 turn 事件
         // 可能不会回流到 iPad。
         try await ensureThreadResumedOnConnection(sessionID: sessionID, cwd: context.cwd, builder: builder, connection: connection)
-        await refreshThreadGoalIfAvailable(sessionID: sessionID, builder: builder, connection: connection)
+        // 目标状态是增强信息，不应该卡住实时事件连接。旧 app-server 可能不支持 thread/goal/get，
+        // 慢链路也可能延迟响应；后台刷新即可，连接状态先进入 connected。
+        Task {
+            await refreshThreadGoalIfAvailable(sessionID: sessionID, builder: builder, connection: connection)
+        }
     }
 
     @discardableResult

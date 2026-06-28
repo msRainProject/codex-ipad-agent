@@ -76,7 +76,7 @@ final class CodexAppServerProtocolTests: XCTestCase {
             .text("看图并检查引用"),
             .image(url: "data:image/png;base64,AA==", detail: .high),
             .localImage(path: "/Users/me/repo/screens/a.png", detail: .original),
-            .skill(name: "review", path: "/Users/me/repo/.codex/skills/review/SKILL.md"),
+            .skill(name: "review", path: "/Users/me/.codex/skills/review/SKILL.md"),
             .mention(name: "README", path: "/Users/me/repo/README.md")
         ], options: options)
         let turnStart = try builder.turnStart(threadID: "thread-1", projectID: project.id, payload: payload, clientMessageID: "client-rich")
@@ -96,30 +96,39 @@ final class CodexAppServerProtocolTests: XCTestCase {
         XCTAssertEqual(input[1].objectValue?["detail"]?.stringValue, "high")
         XCTAssertEqual(input[2].objectValue?["path"]?.stringValue, "/Users/me/repo/screens/a.png")
         XCTAssertEqual(input[3].objectValue?["name"]?.stringValue, "review")
+        XCTAssertEqual(input[3].objectValue?["path"]?.stringValue, "/Users/me/.codex/skills/review/SKILL.md")
         let sandbox = try XCTUnwrap(turnParams["sandboxPolicy"]?.objectValue)
         XCTAssertEqual(sandbox["type"]?.stringValue, "readOnly")
         XCTAssertEqual(sandbox["networkAccess"]?.boolValue, false)
     }
 
-    func testRequestBuilderForwardsFullAccessSandbox() throws {
+    func testRequestBuilderRejectsFullAccessSandbox() throws {
         let project = AgentProject(id: "repo", name: "Repo", path: "/Users/me/repo")
         let builder = CodexAppServerRequestBuilder(allowlistedProjects: [project])
         var options = CodexAppServerTurnOptions.default
         options.sandboxMode = .dangerFullAccess
 
-        let threadStart = try builder.threadStart(projectID: project.id, options: options)
-        let threadParams = try XCTUnwrap(threadStart.params?.objectValue)
-        XCTAssertEqual(threadParams["approvalPolicy"]?.stringValue, "on-request")
-        XCTAssertEqual(threadParams["approvalsReviewer"]?.stringValue, "user")
-        XCTAssertEqual(threadParams["sandbox"]?.stringValue, "danger-full-access")
+        XCTAssertThrowsError(try builder.threadStart(projectID: project.id, options: options)) { error in
+            guard case CodexAppServerRequestBuilderError.unsafeParameter(let reason) = error else {
+                XCTFail("Expected unsafeParameter, got \(error)")
+                return
+            }
+            XCTAssertTrue(reason.contains("danger-full-access"))
+        }
 
         let payload = CodexAppServerTurnPayload(prompt: "hi", options: options)
-        let turnStart = try builder.turnStart(threadID: "thread-1", projectID: project.id, payload: payload, clientMessageID: nil)
-        let turnParams = try XCTUnwrap(turnStart.params?.objectValue)
-        let sandbox = try XCTUnwrap(turnParams["sandboxPolicy"]?.objectValue)
-        XCTAssertEqual(sandbox["type"]?.stringValue, "dangerFullAccess")
-        XCTAssertEqual(sandbox["networkAccess"]?.boolValue, false)
-        XCTAssertNil(sandbox["writableRoots"])
+        XCTAssertThrowsError(try builder.turnStart(
+            threadID: "thread-1",
+            projectID: project.id,
+            payload: payload,
+            clientMessageID: nil
+        )) { error in
+            guard case CodexAppServerRequestBuilderError.unsafeParameter(let reason) = error else {
+                XCTFail("Expected unsafeParameter, got \(error)")
+                return
+            }
+            XCTAssertTrue(reason.contains("danger-full-access"))
+        }
     }
 
     func testModelListBuilderAndFlexibleParser() throws {

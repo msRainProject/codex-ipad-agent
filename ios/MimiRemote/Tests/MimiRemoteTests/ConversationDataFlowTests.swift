@@ -4316,7 +4316,7 @@ final class ConversationDataFlowTests: XCTestCase {
     func testSessionInspectorSectionsCollapseDetailsLogsAndDiagnostics() {
         let descriptors = SessionInspectorSectionDescriptor.all
 
-        XCTAssertEqual(descriptors.map(\.title), ["概览", "活动", "文件", "审批"])
+        XCTAssertEqual(descriptors.map(\.title), ["概览", "活动", "Git", "审批"])
         XCTAssertEqual(descriptors.map(\.id), ["context", "activity", "diff", "approval"])
         XCTAssertFalse(descriptors.contains { $0.title == "诊断" })
         XCTAssertFalse(descriptors.contains { $0.title == "详情" })
@@ -7592,8 +7592,7 @@ extension ConversationDataFlowTests {
         })
 
         XCTAssertTrue(socket.sendInput("继续\r", clientMessageID: "client_direct_2"))
-        let followUpMessages = try await waitForFakeAppServerMessages(transport, count: 5)
-        let followUpTurnStart = try decodeAppServerRequest(followUpMessages[4])
+        let followUpTurnStart = try await waitForFakeAppServerRequest(transport, method: "turn/start", after: 4)
         XCTAssertEqual(followUpTurnStart.method, "turn/start")
         let followUpParams = try XCTUnwrap(followUpTurnStart.params?.objectValue)
         XCTAssertEqual(followUpParams["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue, "继续")
@@ -7684,8 +7683,7 @@ extension ConversationDataFlowTests {
         XCTAssertTrue(statuses.contains(.connected))
 
         XCTAssertTrue(socket.sendTurn(CodexAppServerTurnPayload(prompt: "成功 turn"), clientMessageID: "client_direct_accept_success"))
-        let successMessages = try await waitForFakeAppServerMessages(transport, count: 5)
-        let successTurnStart = try decodeAppServerRequest(successMessages[4])
+        let successTurnStart = try await waitForFakeAppServerRequest(transport, method: "turn/start", after: 4)
         XCTAssertEqual(successTurnStart.method, "turn/start")
         XCTAssertEqual(successTurnStart.params?.objectValue?["clientUserMessageId"]?.stringValue, "client_direct_accept_success")
         XCTAssertTrue(acceptedIDs.isEmpty)
@@ -7698,8 +7696,12 @@ extension ConversationDataFlowTests {
         XCTAssertTrue(failures.isEmpty)
 
         XCTAssertTrue(socket.sendTurn(CodexAppServerTurnPayload(prompt: "失败 turn"), clientMessageID: "client_direct_accept_fail"))
-        let failureMessages = try await waitForFakeAppServerMessages(transport, count: 6)
-        let failureTurnStart = try decodeAppServerRequest(failureMessages[5])
+        let sentAfterSuccess = await transport.sentMessages()
+        let failureTurnStart = try await waitForFakeAppServerRequest(
+            transport,
+            method: "turn/start",
+            after: sentAfterSuccess.count
+        )
         XCTAssertEqual(failureTurnStart.method, "turn/start")
         XCTAssertEqual(failureTurnStart.params?.objectValue?["clientUserMessageId"]?.stringValue, "client_direct_accept_fail")
         transport.enqueue(#"{"id":\#(try jsonFragment(for: failureTurnStart.id)),"error":{"code":-32000,"message":"turn failed"}}"#)
@@ -8389,8 +8391,7 @@ extension ConversationDataFlowTests {
                 clientMessageID: "client_reconnect_turn"
             )
         }
-        let turnMessages = try await waitForFakeAppServerMessages(secondTransport, count: 4)
-        let turnStart = try decodeAppServerRequest(turnMessages[3])
+        let turnStart = try await waitForFakeAppServerRequest(secondTransport, method: "turn/start", after: 3)
         XCTAssertEqual(turnStart.method, "turn/start")
         let turnParams = try XCTUnwrap(turnStart.params?.objectValue)
         XCTAssertEqual(turnParams["threadId"]?.stringValue, "thr_reconnect")
@@ -8403,7 +8404,10 @@ extension ConversationDataFlowTests {
         let firstSentMessages = await firstTransport.sentMessages()
         let secondSentMessages = await secondTransport.sentMessages()
         XCTAssertEqual(firstSentMessages.count, 3)
-        XCTAssertEqual(secondSentMessages.count, 4)
+        XCTAssertTrue(secondSentMessages.count >= 4)
+        let secondRequests = secondSentMessages.compactMap { try? decodeAppServerRequest($0) }
+        XCTAssertEqual(secondRequests.filter { $0.method == "thread/resume" }.count, 1)
+        XCTAssertEqual(secondRequests.filter { $0.method == "turn/start" }.count, 1)
     }
 
     func testCodexAppServerSessionRuntimeRetiresConnectionAfterTurnStartTimeout() async throws {
@@ -9305,6 +9309,31 @@ private func waitForFakeAppServerMessages(
     }
     XCTFail("Timed out waiting for \(count) app-server messages", file: file, line: line)
     return await transport.sentMessages()
+}
+
+private func waitForFakeAppServerRequest(
+    _ transport: FakeCodexAppServerTransport,
+    method: String,
+    after startIndex: Int = 0,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async throws -> CodexAppServerRequest {
+    for _ in 0..<200 {
+        let messages = await transport.sentMessages()
+        if startIndex < messages.count {
+            for text in messages[startIndex...] {
+                guard let request = try? decodeAppServerRequest(text) else {
+                    continue
+                }
+                if request.method == method {
+                    return request
+                }
+            }
+        }
+        try await Task.sleep(nanoseconds: 10_000_000)
+    }
+    XCTFail("Timed out waiting for app-server request \(method)", file: file, line: line)
+    throw MockError.unimplemented
 }
 
 private func waitForFakeAppServerResponse(

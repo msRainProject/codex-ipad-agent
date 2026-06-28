@@ -42,7 +42,7 @@ final class AppStore: ObservableObject {
     init() {
         self.endpoint = UserDefaults.standard.string(forKey: endpointKey) ?? defaultEndpoint
         self.token = tokenStore.load()
-        // 当前 iPad 客户端只保留 Codex app-server JSON-RPC 直连链路；旧版本写入的连接模式配置直接清理掉。
+        // 当前移动客户端只保留 Codex app-server JSON-RPC 直连链路；旧版本写入的连接模式配置直接清理掉。
         UserDefaults.standard.removeObject(forKey: retiredConnectionModeKey)
     }
 
@@ -74,7 +74,7 @@ final class AppStore: ObservableObject {
         UserDefaults.standard.removeObject(forKey: retiredConnectionModeKey)
         try tokenStore.save(token)
         // “保存并加载”必须重新读取 agentd 的 app-server config；否则 direct runtime
-        // 会继续使用旧 allowlist 缓存，后端扫描根目录变化后 iPad 仍可能只看到旧项目。
+        // 会继续使用旧 allowlist 缓存，后端扫描根目录变化后移动端仍可能只看到旧项目。
         resetDirectRuntime()
         self.endpoint = normalized
         self.token = token

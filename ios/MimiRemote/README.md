@@ -1,17 +1,17 @@
-# Mimi Remote iPad App
+# Mimi Remote iOS App
 
 ## 目标
 
-Mimi Remote 是原生 iPad SwiftUI 控制台。`MimiRemote` 只保留为 Xcode target、scheme 和源码目录名，不作为用户侧产品名。
+Mimi Remote 是原生 iPhone / iPad SwiftUI 控制台。`MimiRemote` 只保留为 Xcode target、scheme 和源码目录名，不作为用户侧产品名。
 
-目标主链路是 iPad App 直接消费 Codex app-server JSON-RPC 协议；Mac 上的 `agentd` 只负责项目 allowlist、鉴权、健康诊断、app-server 启动和可选薄网关。这个 App 是独立第三方客户端，不隶属于 OpenAI，也不是任何商业产品的免费替代品。
+目标主链路是 iPhone / iPad App 直接消费 Codex app-server JSON-RPC 协议；Mac 上的 `agentd` 只负责项目 allowlist、鉴权、健康诊断、app-server 启动和可选薄网关。这个 App 是独立第三方客户端，不隶属于 OpenAI，也不是任何商业产品的免费替代品。
 
 ## 方案
 
 整体链路：
 
 ```text
-iPad SwiftUI App
+iPhone / iPad SwiftUI App
   -> REST: /api/projects /api/app-server/config
   -> WebSocket: /api/app-server/ws
   -> Codex app-server JSON-RPC
@@ -137,7 +137,7 @@ REFRESH_INSTALL=1 ./scripts/deploy-ipad.sh
 
 外观验收：
 
-- 外观模式支持 `系统`、`浅色`、`深色`；系统模式跟随 iPad 当前外观，手动浅色/深色不跟随系统变化。
+- 外观模式支持 `系统`、`浅色`、`深色`；系统模式跟随当前设备外观，手动浅色/深色不跟随系统变化。
 - 主题预设先支持 `Codex`、`Xcode`、`Gruvbox`，覆盖聊天背景、气泡、代码块、侧栏选中态、日志和 Inspector 常用面板。
 - 字体设置支持 UI 字体、代码字体和 85%-135% 字体大小；超出范围会自动 clamp。
 - 外观设置只写入本机 `UserDefaults`，不触发连接重置，不影响 Endpoint、Token、会话、日志和 app-server runtime。

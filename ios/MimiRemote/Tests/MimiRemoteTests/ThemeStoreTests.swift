@@ -26,6 +26,7 @@ final class ThemeStoreTests: XCTestCase {
         let store = ThemeStore(defaults: defaults)
 
         XCTAssertEqual(store.mode, .system)
+        XCTAssertEqual(store.mode.subtitle, "跟随当前设备外观")
         XCTAssertEqual(store.preset, .codex)
         XCTAssertEqual(store.uiFontPreset, .system)
         XCTAssertEqual(store.codeFontPreset, .systemMono)
@@ -189,5 +190,39 @@ final class ThemeStoreTests: XCTestCase {
         var alpha: CGFloat = 0
         XCTAssertTrue(UIColor(color).getRed(&red, green: &green, blue: &blue, alpha: &alpha))
         return (red, green, blue, alpha)
+    }
+}
+
+@MainActor
+final class ResponsiveLayoutTests: XCTestCase {
+    func testWorkbenchLayoutUsesCompactNavigationOnPhoneWidth() {
+        let layout = WorkbenchLayout(containerWidth: 390, horizontalSizeClass: .compact)
+
+        XCTAssertTrue(layout.usesCompactNavigation)
+        XCTAssertTrue(layout.prefersDetailOnly)
+        XCTAssertFalse(layout.usesAttachedInspector)
+        XCTAssertLessThanOrEqual(layout.titleMaxWidth, 150)
+        XCTAssertGreaterThanOrEqual(layout.titleMaxWidth, 86)
+    }
+
+    func testWorkbenchLayoutKeepsSplitNavigationOnWidePadWidth() {
+        let layout = WorkbenchLayout(containerWidth: 1180, horizontalSizeClass: .regular)
+
+        XCTAssertFalse(layout.usesCompactNavigation)
+        XCTAssertFalse(layout.prefersDetailOnly)
+        XCTAssertTrue(layout.usesAttachedInspector)
+        XCTAssertEqual(layout.projectColumn.ideal, 330)
+        XCTAssertEqual(layout.titleMaxWidth, 340)
+    }
+
+    func testConversationLayoutFitsPhonePortraitWidth() {
+        let layout = ConversationLayout(containerWidth: 390, horizontalSizeClass: .compact)
+
+        XCTAssertEqual(layout.horizontalInset, 12)
+        XCTAssertEqual(layout.composerAvailableWidth, 366)
+        XCTAssertEqual(layout.composerMaxWidth, .infinity)
+        XCTAssertLessThanOrEqual(layout.userBubbleMaxWidth, 354)
+        XCTAssertLessThanOrEqual(layout.assistantBubbleMaxWidth, 354)
+        XCTAssertLessThanOrEqual(layout.runtimeCardMaxWidth, 366)
     }
 }

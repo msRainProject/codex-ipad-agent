@@ -5,6 +5,7 @@ struct SessionContextSidebarView: View {
     @EnvironmentObject private var contextStore: SessionContextStore
     @EnvironmentObject private var themeStore: ThemeStore
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var pendingCommandAction: AgentCommandAction?
     @State private var goalEditor: ThreadGoalEditorDraft?
 
@@ -60,6 +61,10 @@ struct SessionContextSidebarView: View {
                 Text("\(action.displayCommand)\n\(action.workingDir)")
             }
         }
+    }
+
+    private var currentDeviceSymbolName: String {
+        horizontalSizeClass == .compact ? "iphone" : "ipad"
     }
 
     @ViewBuilder
@@ -270,7 +275,7 @@ struct SessionContextSidebarView: View {
     private func entrySection(_ sources: [SessionContextSource]) -> some View {
         Section("入口") {
             ContextItemRow(
-                symbolName: "ipad",
+                symbolName: currentDeviceSymbolName,
                 title: "当前入口",
                 subtitle: "Mimi Remote",
                 badge: nil
@@ -441,7 +446,7 @@ struct SessionContextSidebarView: View {
             return "CLI"
         case "appserver", "app-server", "codex app-server":
             return "app-server"
-        case "ipad", "ios":
+        case "ipad", "iphone", "ios":
             return "Mimi Remote"
         case "user":
             return "用户发起"

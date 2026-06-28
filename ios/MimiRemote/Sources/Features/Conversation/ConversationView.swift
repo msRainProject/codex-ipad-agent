@@ -27,7 +27,7 @@ struct ConversationView: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 HStack {
                     Spacer(minLength: 0)
-                    ComposerView()
+                    ComposerView(availableWidth: layout.composerAvailableWidth)
                         .frame(maxWidth: layout.composerMaxWidth)
                     Spacer(minLength: 0)
                 }
@@ -367,6 +367,7 @@ private extension Collection {
 struct ConversationLayout: Equatable {
     let horizontalInset: CGFloat
     let messageSideSpacer: CGFloat
+    let composerAvailableWidth: CGFloat
     let composerMaxWidth: CGFloat
     let composerTopPadding: CGFloat
     let composerBottomPadding: CGFloat
@@ -386,7 +387,8 @@ struct ConversationLayout: Equatable {
 
         horizontalInset = isCompactWidth ? 12 : (isTightPadWidth ? 16 : 24)
         messageSideSpacer = isCompactWidth ? 12 : (isTightPadWidth ? 24 : 56)
-        composerMaxWidth = isCompactWidth ? .infinity : min(920, max(360, containerWidth - horizontalInset * 2))
+        composerAvailableWidth = max(240, containerWidth - horizontalInset * 2)
+        composerMaxWidth = isCompactWidth ? .infinity : min(920, max(360, composerAvailableWidth))
         composerTopPadding = isCompactWidth ? 8 : 10
         composerBottomPadding = isCompactWidth ? 10 : 12
 

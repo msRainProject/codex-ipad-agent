@@ -108,7 +108,7 @@ private struct ConnectionSettingsSections: View {
                     }
                     .padding(.vertical, 4)
                 } footer: {
-                    Text("Mac 上出现二维码后，回到 iPad 扫码连接。二维码过期时，在 Mac 运行 agentd pair 刷新。你的代码和 Codex 凭证仍留在自己的 Mac 上。")
+                    Text("Mac 上出现二维码后，回到当前设备扫码连接。二维码过期时，在 Mac 运行 agentd pair 刷新。你的代码和 Codex 凭证仍留在自己的 Mac 上。")
                 }
             }
 
@@ -120,7 +120,7 @@ private struct ConnectionSettingsSections: View {
                 }
                 .disabled(isSavingConnection)
             } header: {
-                Text("在 iPad 上配对")
+                Text("在当前设备上配对")
             } footer: {
                 Text("扫描 Mimi Mac 助手显示的二维码后会自动测试连接；成功后直接进入工作台。")
             }
@@ -230,10 +230,10 @@ private struct ConnectionSettingsSections: View {
             return "配对二维码已过期，请在 Mac 上重新运行 agentd pair 后扫码。"
         }
         if lowercased.contains("unauthorized") || lowercased.contains("401") {
-            return "这台 iPad 没有通过 Mac 助手验证，请重新扫码连接。"
+            return "这台设备没有通过 Mac 助手验证，请重新扫码连接。"
         }
         if lowercased.contains("timed out") || lowercased.contains("cannot connect") || raw.contains("无法连接") {
-            return "iPad 暂时找不到这台 Mac。请确认 Mimi Mac 助手正在运行，并且 iPad 能访问局域网、Tailscale 或自建 VPS 中转地址。"
+            return "当前设备暂时找不到这台 Mac。请确认 Mimi Mac 助手正在运行，并且当前设备能访问局域网、Tailscale 或自建 VPS 中转地址。"
         }
         if raw.contains("Endpoint") || raw.contains("连接链接") {
             return raw
@@ -585,7 +585,7 @@ struct AppearanceView: View {
             } header: {
                 Text("深浅色")
             } footer: {
-                Text("系统模式会跟随 iPad 当前外观；浅色和深色会固定 App 外观。")
+                Text("系统模式会跟随当前设备外观；浅色和深色会固定 App 外观。")
             }
 
             Section {

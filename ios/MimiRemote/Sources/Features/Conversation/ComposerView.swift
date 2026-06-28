@@ -129,6 +129,8 @@ struct ComposerView: View {
     @AppStorage("agentd.developerMode") private var developerModeEnabled = false
     @AppStorage(VoiceInputLanguage.storageKey) private var selectedVoiceLanguageID = VoiceInputLanguage.automatic.rawValue
 
+    var availableWidth: CGFloat?
+
     private static let minimumUsableVoiceDuration: TimeInterval = 0.35
     private static let minimumVoicePressDuration: TimeInterval = 0.45
 
@@ -279,7 +281,7 @@ struct ComposerView: View {
     }
 
     private var isCompactComposer: Bool {
-        horizontalSizeClass == .compact
+        horizontalSizeClass == .compact || (availableWidth.map { $0 < 560 } ?? false)
     }
 
     // 当前活动（“正在执行…”带 spinner 的标题）可能较长，单独占一行，不并入下面的状态行。
@@ -833,7 +835,7 @@ struct ComposerView: View {
     }
 
     // 录音/准备/转写的实时状态，作为状态行中段的胶囊。波形单独订阅 levelMeter，
-    // 不会带动整条 ComposerView 重绘。紧凑布局（iPhone）下只留波形、隐去文案，避免一行挤不下。
+    // 不会带动整条 ComposerView 重绘。紧凑布局（iPhone/窄分屏）下只留波形、隐去文案，避免一行挤不下。
     @ViewBuilder
     private var voiceWaveformContent: some View {
         let tokens = themeStore.tokens(for: colorScheme)
@@ -1681,7 +1683,7 @@ struct ComposerView: View {
         let resized = renderer.image { _ in
             image.draw(in: CGRect(origin: .zero, size: targetSize))
         }
-        // iPad 侧只负责把截图/照片作为上下文传给 app-server；先降采样再 JPEG 编码，
+        // 移动端只负责把截图/照片作为上下文传给 app-server；先降采样再 JPEG 编码，
         // 避免原图 base64 把 SwiftUI state、WebSocket payload 和内存峰值一起撑大。
         return resized.jpegData(compressionQuality: 0.82)
     }
@@ -3297,7 +3299,7 @@ private struct PendingApprovalActionCard: View {
     }
 
     private var approvalButtons: some View {
-        // iPad 触控优先：两个决策按钮等宽铺满、加大高度和字号，比并排小按钮更好点。
+        // 移动端触控优先：两个决策按钮等宽铺满、加大高度和字号，比并排小按钮更好点。
         HStack(spacing: 10) {
             Button(role: .destructive, action: onDecline) {
                 Label("拒绝", systemImage: "xmark.circle")
