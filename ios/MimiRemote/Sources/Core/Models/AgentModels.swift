@@ -1274,6 +1274,7 @@ enum MessageRole: String, Codable, Hashable {
 
 enum MessageKind: String, Codable, Hashable {
     case message
+    case plan
     case reasoningSummary = "reasoning_summary"
     case commandSummary = "command_summary"
     case fileChangeSummary = "file_change_summary"

@@ -477,7 +477,9 @@ struct CodexAppServerEventProjector {
 
     private func processItemMessageKind(type: String) -> MessageKind? {
         switch type {
-        case "plan", "reasoning":
+        case "plan":
+            return .plan
+        case "reasoning":
             return .reasoningSummary
         case "commandExecution", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "webSearch":
             return .commandSummary

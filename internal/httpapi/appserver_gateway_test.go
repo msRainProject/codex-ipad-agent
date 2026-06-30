@@ -790,6 +790,25 @@ func TestAppServerGatewayRejectsUnsafeCWDAndSandbox(t *testing.T) {
 			want: "path 必须来自 projects allowlist",
 		},
 		{
+			name: "blank skill path",
+			payload: map[string]any{
+				"id":     1401,
+				"method": "turn/start",
+				"params": map[string]any{
+					"threadId":       "thread-1",
+					"cwd":            projectDir,
+					"input":          []any{map[string]any{"type": "skill", "name": "review", "path": " "}},
+					"approvalPolicy": "on-request",
+					"sandboxPolicy": map[string]any{
+						"type":          "workspaceWrite",
+						"writableRoots": []string{projectDir},
+						"networkAccess": false,
+					},
+				},
+			},
+			want: "turn/start.input.skill.path 不能为空",
+		},
+		{
 			name: "collaboration mode invalid mode",
 			payload: map[string]any{
 				"id":     18,
@@ -1921,14 +1940,14 @@ func TestAppServerGatewayForwardsStructuredUserInputUnchanged(t *testing.T) {
 	defer server.Close()
 
 	localImage := filepath.Join(projectDir, "screen.png")
-	skillPath := filepath.Join(projectDir, "skills", "review.md")
-	if err := os.MkdirAll(filepath.Dir(skillPath), 0o755); err != nil {
+	userSkillPath := filepath.Join(t.TempDir(), ".codex", "skills", "review", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(userSkillPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(localImage, []byte("png"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(skillPath, []byte("skill"), 0o600); err != nil {
+	if err := os.WriteFile(userSkillPath, []byte("skill"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1941,7 +1960,7 @@ func TestAppServerGatewayForwardsStructuredUserInputUnchanged(t *testing.T) {
 		`{"id":21,"method":"turn/start","params":{"threadId":"thread-structured","cwd":%q,"input":[{"type":"text","text":"看图并检查引用","text_elements":[]},{"type":"image","url":"data:image/png;base64,AA==","detail":"high"},{"type":"localImage","path":%q,"detail":"original"},{"type":"skill","name":"review","path":%q},{"type":"mention","name":"project","path":%q}],"model":"gpt-5-codex","effort":"high","serviceTier":"priority","approvalPolicy":"on-request","approvalsReviewer":"user","sandboxPolicy":{"type":"workspaceWrite","writableRoots":[%q],"networkAccess":false}}}`,
 		projectDir,
 		localImage,
-		skillPath,
+		userSkillPath,
 		projectDir,
 		projectDir,
 	))
@@ -1956,6 +1975,47 @@ func TestAppServerGatewayForwardsStructuredUserInputUnchanged(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("fake upstream 未收到结构化 input 帧")
+	}
+}
+
+func TestAppServerGatewayAllowsExternalSkillPathForTurnSteer(t *testing.T) {
+	var projectDir string
+	upstreamURL, received, _ := fakeAppServerUpstream(t, func(conn *websocket.Conn, messageType int, payload []byte) {
+		respondToThreadListAuthorization(t, conn, payload, projectDir, "thread-skill-steer")
+	})
+	handler, dir := appServerGatewayRouterFixture(t, upstreamURL)
+	projectDir = dir
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	userSkillPath := filepath.Join(t.TempDir(), ".codex", "skills", "review", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(userSkillPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userSkillPath, []byte("skill"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	conn := dialAuthedGateway(t, server.URL)
+	defer conn.Close()
+
+	authorizeGatewayThread(t, conn, received, projectDir, "thread-skill-steer")
+
+	authorized := []byte(fmt.Sprintf(
+		`{"id":22,"method":"turn/steer","params":{"threadId":"thread-skill-steer","expectedTurnId":"turn-1","clientUserMessageId":"client-skill-steer","input":[{"type":"text","text":"继续"},{"type":"skill","name":"review","path":%q}]}}`,
+		userSkillPath,
+	))
+	if err := conn.WriteMessage(websocket.TextMessage, authorized); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case got := <-received:
+		if !bytes.Equal(got, authorized) {
+			t.Fatalf("turn/steer 的外部 skill.path 必须原样转发：got=%s want=%s", got, authorized)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("fake upstream 未收到 turn/steer skill 帧")
 	}
 }
 

@@ -317,7 +317,7 @@ struct ConversationTimelineItemBuilder {
             return false
         }
         switch message.kind {
-        case .reasoningSummary, .commandSummary, .fileChangeSummary, .approval, .userInput:
+        case .plan, .reasoningSummary, .commandSummary, .fileChangeSummary, .approval, .userInput:
             return true
         case .error, .message:
             return false
@@ -1415,9 +1415,9 @@ private struct RuntimeSummaryCard: View {
             .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .messageContextMenu(for: message) {
                 cardSurface
-                    .frame(maxWidth: layout.runtimeCardMaxWidth, alignment: .leading)
+                    .frame(maxWidth: cardMaxWidth, alignment: .leading)
             }
-            .frame(maxWidth: layout.runtimeCardMaxWidth, alignment: .leading)
+            .frame(maxWidth: cardMaxWidth, alignment: .leading)
     }
 
     private var cardSurface: some View {
@@ -1431,10 +1431,7 @@ private struct RuntimeSummaryCard: View {
                 Text(title)
                     .font(themeStore.uiFont(.caption, weight: .semibold))
                     .foregroundStyle(tokens.primaryText)
-                Text(message.content)
-                    .font(themeStore.uiFont(.caption))
-                    .foregroundStyle(tokens.secondaryText)
-                    .lineLimit(3)
+                contentView
                 HStack(spacing: 0) {
                     Spacer(minLength: 0)
                     MessageTimestampCaption(text: message.timestampCaptionText)
@@ -1451,8 +1448,54 @@ private struct RuntimeSummaryCard: View {
         }
     }
 
+    @ViewBuilder
+    private var contentView: some View {
+        if message.kind == .plan {
+            planMarkdownContent
+        } else {
+            Text(message.content)
+                .font(themeStore.uiFont(.caption))
+                .foregroundStyle(tokens.secondaryText)
+                .lineLimit(3)
+        }
+    }
+
+    private var planMarkdownContent: some View {
+        let style = MarkdownStyle.make(
+            role: .assistant,
+            colorScheme: colorScheme,
+            fontScale: themeStore.fontScale * 0.94,
+            tokens: tokens
+        )
+        let plan = MessageRenderPlanCache.shared.plan(for: message)
+        let blocks = displayBlocks(for: plan)
+
+        return VStack(alignment: .leading, spacing: style.blockSpacing) {
+            ForEach(blocks) { block in
+                MarkdownBlockView(block: block, style: style)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var cardMaxWidth: CGFloat {
+        message.kind == .plan ? layout.assistantBubbleMaxWidth : layout.runtimeCardMaxWidth
+    }
+
+    private func displayBlocks(for plan: MessageRenderPlan) -> [MarkdownBlock] {
+        guard plan.blocks.count == 1,
+              case let .proposedPlan(blocks, _) = plan.blocks[0].kind
+        else {
+            return plan.blocks
+        }
+        return blocks
+    }
+
     private var title: String {
         switch message.kind {
+        case .plan:
+            return "计划"
         case .reasoningSummary:
             return "推理摘要"
         case .commandSummary:
@@ -1484,6 +1527,8 @@ private struct RuntimeSummaryCard: View {
 
     private var symbolName: String {
         switch message.kind {
+        case .plan:
+            return "list.clipboard"
         case .reasoningSummary:
             return "brain.head.profile"
         case .commandSummary:
@@ -1509,6 +1554,8 @@ private struct RuntimeSummaryCard: View {
 
     private var tint: Color {
         switch message.kind {
+        case .plan:
+            return tokens.accent
         case .approval:
             if isApprovedApproval {
                 return tokens.success
@@ -1530,6 +1577,8 @@ private struct RuntimeSummaryCard: View {
 
     private var background: Color {
         switch message.kind {
+        case .plan:
+            return tokens.accent.opacity(0.08)
         case .approval:
             if isApprovedApproval {
                 return tokens.success.opacity(0.10)

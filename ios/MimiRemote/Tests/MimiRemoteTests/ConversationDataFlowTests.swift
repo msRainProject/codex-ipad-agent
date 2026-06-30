@@ -1417,7 +1417,7 @@ final class ConversationDataFlowTests: XCTestCase {
             CodexHistoryMessage(
                 id: "plan_history_processed",
                 role: "system",
-                kind: .reasoningSummary,
+                kind: .plan,
                 content: "让子 agent 生成一个短笑话。",
                 createdAt: Date(timeIntervalSince1970: 12),
                 turnID: turnID,
@@ -9616,6 +9616,114 @@ extension ConversationDataFlowTests {
         socket.disconnect()
     }
 
+    // performStartTurn 路径：thread/list 里认识但本连接尚未 resume 过的新线程，首次 startTurn 会先补
+    // thread/resume。真实 app-server 对没跑过 turn 的线程回 -32600 no rollout found；修复后这一步被良性
+    // 吞掉，turn/start 仍照常发出并落盘 rollout，而不是把首条消息直接打回失败。
+    func testDirectStartTurnToleratesNoRolloutFoundResumeBeforeFirstTurn() async throws {
+        let project = AgentProject(id: "proj_start_no_rollout", name: "Start No Rollout", path: "/tmp/start-no-rollout")
+        let pool = FakeCodexAppServerTransportPool()
+        let runtime = CodexAppServerSessionRuntime(
+            endpoint: "http://127.0.0.1:8787",
+            token: "outer-token",
+            transportFactory: { pool.make() },
+            configProvider: { makeDirectAppServerConfig(project: project) }
+        )
+
+        // thread/list 让 runtime 认识这个还没跑过 turn 的线程（contextsBySessionID 填充），但本连接尚未
+        // thread/resume 过它，于是首次 startTurn 会先补 resume。
+        let listTask = Task {
+            try await runtime.sessionsPage(projectID: project.id, cursor: nil, limit: nil)
+        }
+        let transport = try await waitForFakeAppServerTransport(in: pool, index: 0)
+        let initializeMessages = try await waitForFakeAppServerMessages(transport, count: 1)
+        let initialize = try decodeAppServerRequest(initializeMessages[0])
+        assertInitializeEnablesExperimentalAPI(initialize)
+        transportResponse(transport, id: initialize.id, result: #"{"userAgent":"fake-codex","platformFamily":"macos"}"#)
+
+        let threadList = try await waitForFakeAppServerRequest(transport, method: "thread/list", after: 1)
+        transportResponse(transport, id: threadList.id, result: #"{"data":[{"id":"thr_start_no_rollout","sessionId":"thr_start_no_rollout","preview":"","ephemeral":false,"modelProvider":"openai","createdAt":1780490700,"updatedAt":1780490701,"status":{"type":"idle"},"path":null,"cwd":"/tmp/start-no-rollout","cliVersion":"0.0.0","source":"appServer","threadSource":"user","name":"空会话","turns":[]}],"nextCursor":null}"#)
+        _ = try await listTask.value
+
+        let startTask = Task {
+            try await runtime.startTurn(
+                sessionID: "thr_start_no_rollout",
+                payload: CodexAppServerTurnPayload(prompt: "第一条消息"),
+                clientMessageID: "client_start_no_rollout"
+            )
+        }
+
+        let beforeResumeMessages = await transport.sentMessages()
+        let resume = try await waitForFakeAppServerRequest(transport, method: "thread/resume", after: beforeResumeMessages.count)
+        XCTAssertEqual(resume.params?.objectValue?["threadId"]?.stringValue, "thr_start_no_rollout")
+        // 真实 app-server 对没跑过 turn 的新线程回 -32600 no rollout found；修复后这一步被良性吞掉，不阻断
+        // 后续 turn/start，而不是把首条消息直接打回失败。
+        transportErrorResponse(transport, id: resume.id, code: -32600, message: "no rollout found for thread id thr_start_no_rollout")
+
+        let beforeTurnMessages = await transport.sentMessages()
+        let turnStart = try await waitForFakeAppServerRequest(transport, method: "turn/start", after: beforeTurnMessages.count)
+        XCTAssertEqual(turnStart.params?.objectValue?["threadId"]?.stringValue, "thr_start_no_rollout")
+        XCTAssertEqual(turnStart.params?.objectValue?["clientUserMessageId"]?.stringValue, "client_start_no_rollout")
+        transportResponse(transport, id: turnStart.id, result: #"{"turn":{"id":"turn_start_no_rollout","items":[],"itemsView":{"type":"complete"},"status":"inProgress","error":null,"startedAt":1780490702,"completedAt":null,"durationMs":null}}"#)
+
+        let turnID = try await startTask.value
+        XCTAssertEqual(turnID, "turn_start_no_rollout")
+        XCTAssertNil(pool.transport(at: 1), "no rollout found 被良性吞掉，不应触发重连建立新 transport")
+    }
+
+    // 窄化保护：只有 no rollout found 才良性放行；其它 resume 失败（这里用 -32603 internal error）仍必须
+    // 冒泡成 WebSocket failed，避免 isNoRolloutFoundError 把所有 resume 错误一锅端、掩盖真实故障。
+    func testEmptyNewDirectSessionSurfacesNonRolloutResumeError() async throws {
+        let project = AgentProject(id: "proj_resume_fail", name: "Resume Fail", path: "/tmp/resume-fail")
+        let transport = FakeCodexAppServerTransport()
+        let runtime = CodexAppServerSessionRuntime(
+            endpoint: "http://127.0.0.1:8787",
+            token: "outer-token",
+            transportFactory: { transport },
+            configProvider: { makeDirectAppServerConfig(project: project) }
+        )
+        let client = CodexAppServerSessionAPIClient(runtime: runtime)
+
+        let createTask = Task {
+            try await client.createSession(CreateSessionRequest(
+                projectID: project.id,
+                prompt: "",
+                input: [],
+                resumeID: "",
+                clientMessageID: nil
+            ))
+        }
+
+        let initializeMessages = try await waitForFakeAppServerMessages(transport, count: 1)
+        let initialize = try decodeAppServerRequest(initializeMessages[0])
+        transport.enqueue(#"{"id":\#(try jsonFragment(for: initialize.id)),"result":{"userAgent":"fake-codex","platformFamily":"macos"}}"#)
+
+        let threadMessages = try await waitForFakeAppServerMessages(transport, count: 3)
+        let threadStart = try decodeAppServerRequest(threadMessages[2])
+        XCTAssertEqual(threadStart.method, "thread/start")
+        transport.enqueue(#"{"id":\#(try jsonFragment(for: threadStart.id)),"result":{"thread":{"id":"thr_resume_fail","sessionId":"thr_resume_fail","preview":"","ephemeral":false,"modelProvider":"openai","createdAt":1780490800,"updatedAt":1780490801,"status":{"type":"idle"},"path":null,"cwd":"/tmp/resume-fail","cliVersion":"0.0.0","source":"appServer","threadSource":"user","name":"空会话","turns":[]}}}"#)
+        _ = try await createTask.value
+
+        let socket = CodexAppServerSessionWebSocketClient(runtime: runtime)
+        var statuses: [WebSocketStatus] = []
+        socket.onStatus = { statuses.append($0) }
+        socket.connect(sessionID: "thr_resume_fail")
+
+        let resume = try await waitForFakeAppServerRequest(transport, method: "thread/resume", after: 3)
+        XCTAssertEqual(resume.params?.objectValue?["threadId"]?.stringValue, "thr_resume_fail")
+        transport.enqueue(#"{"id":\#(try jsonFragment(for: resume.id)),"error":{"code":-32603,"message":"internal error"}}"#)
+
+        func containsFailed(_ items: [WebSocketStatus]) -> Bool {
+            items.contains { if case .failed = $0 { return true } else { return false } }
+        }
+        for _ in 0..<200 where !containsFailed(statuses) {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertTrue(containsFailed(statuses), "非 no rollout found 的 resume 错误必须冒泡为 failed")
+        XCTAssertFalse(statuses.contains(.connected), "resume 真失败时不应进入 connected")
+
+        socket.disconnect()
+    }
+
     func testDirectRuntimeAutoSkipsUserInputWhenPlanGuidanceDisabled() async throws {
         let project = AgentProject(id: "proj_plan_skip", name: "Plan Skip", path: "/tmp/plan-skip")
         let transport = FakeCodexAppServerTransport()
@@ -10040,7 +10148,7 @@ extension ConversationDataFlowTests {
 
         let page = try await pageTask.value
         XCTAssertEqual(page.messages.map(\.role), ["user", "system", "system", "system", "system", "assistant"])
-        XCTAssertEqual(page.messages.map(\.kind), [.message, .reasoningSummary, .reasoningSummary, .reasoningSummary, .commandSummary, .message])
+        XCTAssertEqual(page.messages.map(\.kind), [.message, .reasoningSummary, .plan, .reasoningSummary, .commandSummary, .message])
         XCTAssertEqual(page.messages.last?.createdAt, Date(timeIntervalSince1970: 1780490134))
 
         let conversationStore = ConversationStore()
@@ -10931,7 +11039,7 @@ extension ConversationDataFlowTests {
         if case .processItemCompleted(let message, let context, _) = try XCTUnwrap(projector.project(planCompleted)) {
             XCTAssertEqual(message.id, "appserver:turn_demo:plan_1")
             XCTAssertEqual(message.role, .system)
-            XCTAssertEqual(message.kind, .reasoningSummary)
+            XCTAssertEqual(message.kind, .plan)
             XCTAssertEqual(message.content, "检查上下文并给出答案。")
             XCTAssertNil(context)
         } else {

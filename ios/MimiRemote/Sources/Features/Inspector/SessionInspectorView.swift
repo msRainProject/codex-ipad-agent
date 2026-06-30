@@ -230,6 +230,8 @@ private struct RuntimeActivityPanelView: View {
 
     private func title(for kind: MessageKind) -> String {
         switch kind {
+        case .plan:
+            return "计划"
         case .reasoningSummary:
             return "推理摘要"
         case .commandSummary:
@@ -249,6 +251,8 @@ private struct RuntimeActivityPanelView: View {
 
     private func symbolName(for kind: MessageKind) -> String {
         switch kind {
+        case .plan:
+            return "list.clipboard"
         case .reasoningSummary:
             return "brain.head.profile"
         case .commandSummary:
@@ -268,6 +272,8 @@ private struct RuntimeActivityPanelView: View {
 
     private func tint(for kind: MessageKind, tokens: ThemeTokens) -> Color {
         switch kind {
+        case .plan:
+            return tokens.accent
         case .approval:
             return tokens.warning
         case .userInput:

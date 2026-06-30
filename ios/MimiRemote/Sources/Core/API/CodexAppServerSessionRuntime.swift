@@ -1898,7 +1898,7 @@ actor CodexAppServerSessionRuntime {
             guard !text.isEmpty else {
                 return nil
             }
-            return CodexHistoryMessage(id: messageID, role: "system", kind: .reasoningSummary, content: text, createdAt: startedAt, turnID: turnID, itemID: itemID)
+            return CodexHistoryMessage(id: messageID, role: "system", kind: .plan, content: text, createdAt: startedAt, turnID: turnID, itemID: itemID)
         case "reasoning":
             let text = reasoningHistoryText(from: item)
             guard !text.isEmpty else {

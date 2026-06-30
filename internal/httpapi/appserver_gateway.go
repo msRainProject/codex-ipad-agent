@@ -1413,7 +1413,7 @@ func (r *Router) validateGatewayPolicyParams(method string, params map[string]an
 			if _, ok := r.projectForGatewayPath(path); ok {
 				continue
 			}
-			// browse/worktree workspace 的结构化输入（图片/mention/skill）允许引用绑定目录内的文件，
+			// browse/worktree workspace 的结构化文件输入（图片/mention）允许引用绑定目录内的文件，
 			// 但不允许引用允许根下的 sibling 目录，保持和 cwd 一样的精确边界。
 			if validated.cwdScopeOK && (validated.cwdScope.browse || validated.cwdScope.managed) && gatewayScopeContainsPath(validated.cwdScope, path) {
 				continue
@@ -1459,12 +1459,18 @@ func collectUserInputPaths(method string, params map[string]any) ([]string, erro
 		}
 		inputType, _ := gatewayStringParam(obj, "type")
 		switch inputType {
-		case "localImage", "skill", "mention":
+		case "localImage", "mention":
 			path, ok := gatewayStringParam(obj, "path")
 			if !ok {
 				return nil, fmt.Errorf("%s.input.%s.path 不能为空", method, inputType)
 			}
 			paths = append(paths, path)
+		case "skill":
+			// Skill 可能来自用户级 / 管理员级 skill root 或插件缓存，不属于当前项目工作区；
+			// gateway 只校验字段完整性，不把 skill.path 当作文件输入路径做 allowlist 限制。
+			if _, ok := gatewayStringParam(obj, "path"); !ok {
+				return nil, fmt.Errorf("%s.input.skill.path 不能为空", method)
+			}
 		case "image":
 			url, ok := gatewayStringParam(obj, "url")
 			if !ok {
