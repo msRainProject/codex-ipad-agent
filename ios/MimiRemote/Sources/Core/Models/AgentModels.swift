@@ -715,6 +715,8 @@ struct CodexHistoryMessage: Identifiable, Codable, Hashable {
     let seq: EventSequence?
     let revision: ModelRevision?
     let sendStatus: MessageSendStatus?
+    let timelineOrdinal: Int64?
+    let userDelivery: UserMessageDelivery?
     let isTimestampFallback: Bool
 
     init(
@@ -730,6 +732,8 @@ struct CodexHistoryMessage: Identifiable, Codable, Hashable {
         seq: EventSequence? = nil,
         revision: ModelRevision? = nil,
         sendStatus: MessageSendStatus? = nil,
+        timelineOrdinal: Int64? = nil,
+        userDelivery: UserMessageDelivery? = nil,
         isTimestampFallback: Bool = false
     ) {
         self.id = id
@@ -744,6 +748,8 @@ struct CodexHistoryMessage: Identifiable, Codable, Hashable {
         self.seq = seq
         self.revision = revision
         self.sendStatus = sendStatus
+        self.timelineOrdinal = timelineOrdinal
+        self.userDelivery = userDelivery
         self.isTimestampFallback = isTimestampFallback
     }
 
@@ -760,6 +766,8 @@ struct CodexHistoryMessage: Identifiable, Codable, Hashable {
         case seq
         case revision
         case sendStatus = "send_status"
+        case timelineOrdinal = "timeline_ordinal"
+        case userDelivery = "user_delivery"
         case isTimestampFallback = "is_timestamp_fallback"
     }
 
@@ -783,6 +791,8 @@ struct CodexHistoryMessage: Identifiable, Codable, Hashable {
             seq: try container.decodeIfPresent(EventSequence.self, forKey: .seq),
             revision: try container.decodeIfPresent(ModelRevision.self, forKey: .revision),
             sendStatus: try container.decodeIfPresent(MessageSendStatus.self, forKey: .sendStatus),
+            timelineOrdinal: try container.decodeIfPresent(Int64.self, forKey: .timelineOrdinal),
+            userDelivery: try container.decodeIfPresent(UserMessageDelivery.self, forKey: .userDelivery),
             isTimestampFallback: try container.decodeIfPresent(Bool.self, forKey: .isTimestampFallback) ?? false
         )
     }
@@ -801,6 +811,8 @@ struct CodexHistoryMessage: Identifiable, Codable, Hashable {
             seq: seq,
             revision: revision,
             sendStatus: sendStatus,
+            timelineOrdinal: timelineOrdinal,
+            userDelivery: userDelivery,
             isTimestampFallback: true
         )
     }
@@ -1172,11 +1184,13 @@ struct ConversationMessage: Identifiable, Hashable {
             updateRenderFingerprint()
         }
     }
-    let createdAt: Date
+    var createdAt: Date
     var updatedAt: Date?
     var sendStatus: MessageSendStatus
     var revision: ModelRevision?
     var turnPayload: CodexAppServerTurnPayload?
+    var timelineOrdinal: Int64?
+    var userDelivery: UserMessageDelivery?
     var isTimestampFallback: Bool
     private(set) var contentRevision: UInt64
     private(set) var contentDigest: UInt64
@@ -1204,6 +1218,8 @@ struct ConversationMessage: Identifiable, Hashable {
         sendStatus: MessageSendStatus = .sent,
         revision: ModelRevision? = nil,
         turnPayload: CodexAppServerTurnPayload? = nil,
+        timelineOrdinal: Int64? = nil,
+        userDelivery: UserMessageDelivery? = nil,
         isTimestampFallback: Bool = false
     ) {
         self.id = id
@@ -1219,6 +1235,8 @@ struct ConversationMessage: Identifiable, Hashable {
         self.sendStatus = sendStatus
         self.revision = revision
         self.turnPayload = turnPayload
+        self.timelineOrdinal = timelineOrdinal
+        self.userDelivery = userDelivery
         self.isTimestampFallback = isTimestampFallback
         let fingerprint = Self.makeRenderFingerprint(for: content)
         self.contentRevision = 0
@@ -1238,6 +1256,8 @@ struct ConversationMessage: Identifiable, Hashable {
             && lhs.updatedAt == rhs.updatedAt
             && lhs.sendStatus == rhs.sendStatus
             && lhs.revision == rhs.revision
+            && lhs.timelineOrdinal == rhs.timelineOrdinal
+            && lhs.userDelivery == rhs.userDelivery
             && lhs.isTimestampFallback == rhs.isTimestampFallback
             && lhs.contentDigest == rhs.contentDigest
             && lhs.contentByteCount == rhs.contentByteCount
@@ -1255,6 +1275,8 @@ struct ConversationMessage: Identifiable, Hashable {
         hasher.combine(updatedAt)
         hasher.combine(sendStatus)
         hasher.combine(revision)
+        hasher.combine(timelineOrdinal)
+        hasher.combine(userDelivery)
         hasher.combine(isTimestampFallback)
         hasher.combine(contentDigest)
         hasher.combine(contentByteCount)
@@ -1317,6 +1339,12 @@ enum MessageSendStatus: String, Codable, Hashable {
     case sent
     case failed
     case confirmed
+}
+
+enum UserMessageDelivery: String, Codable, Hashable {
+    case queued
+    case guided
+    case injected
 }
 
 struct UsageSummary: Codable, Hashable {

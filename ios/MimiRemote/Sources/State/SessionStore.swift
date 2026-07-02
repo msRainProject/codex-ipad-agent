@@ -2365,7 +2365,14 @@ final class SessionStore: ObservableObject {
                 return false
             }
             let clientMessageID = UUID().uuidString
-            conversationStore.appendLocalUser(prompt, sessionID: session.id, clientMessageID: clientMessageID, sendStatus: .sending, turnPayload: payload)
+            conversationStore.appendLocalUser(
+                prompt,
+                sessionID: session.id,
+                clientMessageID: clientMessageID,
+                sendStatus: .sending,
+                turnPayload: payload,
+                userDelivery: runningDelivery == .guided ? .guided : .queued
+            )
             setSessionListProjection(sessionID: session.id, preview: prompt, source: .localUser, clientMessageID: clientMessageID)
             setForegroundActivity(.waitingForAssistant, sessionID: session.id)
             let didAcceptLocally: Bool
@@ -4120,6 +4127,9 @@ final class SessionStore: ObservableObject {
         switch mutation {
         case .set(let sessionID, let turnID):
             updateSession(sessionID) { item in
+                guard item.isRunning else {
+                    return
+                }
                 item.activeTurnID = turnID
             }
         case .clear(let sessionID, let completedTurnID):

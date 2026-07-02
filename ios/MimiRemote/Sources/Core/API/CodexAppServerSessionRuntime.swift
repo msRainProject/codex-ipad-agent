@@ -1550,7 +1550,30 @@ actor CodexAppServerSessionRuntime {
                 metadata(threadID: threadID, turnID: nil)
             ))
         default:
+            backfillActiveTurnFromLiveNotification(method: notification.method, params: params)
             break
+        }
+    }
+
+    private func backfillActiveTurnFromLiveNotification(
+        method: String,
+        params: [String: CodexAppServerJSONValue]
+    ) {
+        guard method != "turn/completed",
+              let threadID = params["threadId"]?.stringValue,
+              let turnID = params["turnId"]?.stringValue,
+              !turnID.isEmpty else {
+            return
+        }
+        guard let context = contextsBySessionID[threadID],
+              context.activeTurnID != turnID || context.session.status != "running" else {
+            return
+        }
+        _ = withUpdatedSession(threadID) { item in
+            // 重连后可能先收到 delta/item completed，错过 turn/started。这里同步 runtime 自己的
+            // activeTurnID 缓存，避免 UI 已允许“引导当前回复”但 steerTurn 在发送层误判 missingActiveTurn。
+            item.status = "running"
+            item.activeTurnID = turnID
         }
     }
 
@@ -2070,20 +2093,27 @@ actor CodexAppServerSessionRuntime {
         })
         var lastResolvedAt = threadUpdatedAt ?? threadCreatedAt
 
-        for turn in turns {
+        for (turnIndex, turn) in turns.enumerated() {
             let turnID = turn["id"]?.stringValue
             let startedAt = firstDate(in: turn, keys: ["startedAt", "started_at", "createdAt", "created_at", "timestamp"])
             let completedAt = firstDate(in: turn, keys: ["completedAt", "completed_at", "updatedAt", "updated_at", "finishedAt", "finished_at"])
             let items = turn["items"]?.arrayValue?.compactMap(\.objectValue) ?? []
-            for item in items {
+            var hasVisibleUserMessageInTurn = false
+            for (itemIndex, item) in items.enumerated() {
                 guard var message = historyMessage(
                     from: item,
                     sessionID: sessionID,
                     turnID: turnID,
+                    timelineOrdinal: historyTimelineOrdinal(turnIndex: turnIndex, itemIndex: itemIndex),
+                    isInjectedUserMessage: hasVisibleUserMessageInTurn,
                     startedAt: startedAt,
-                    completedAt: completedAt
+                    completedAt: completedAt,
+                    estimatedAt: estimatedHistoryItemDate(startedAt: startedAt, completedAt: completedAt, itemIndex: itemIndex, itemCount: items.count)
                 ) else {
                     continue
+                }
+                if message.role == "user" {
+                    hasVisibleUserMessageInTurn = true
                 }
                 if message.createdAt == nil {
                     // 历史消息缺少 item/turn 级时间时不能兜底成当前加载时间；用上游 thread
@@ -2104,28 +2134,37 @@ actor CodexAppServerSessionRuntime {
         from item: [String: CodexAppServerJSONValue],
         sessionID: SessionID,
         turnID: TurnID?,
+        timelineOrdinal: Int64,
+        isInjectedUserMessage: Bool,
         startedAt: Date?,
-        completedAt: Date?
+        completedAt: Date?,
+        estimatedAt: Date?
     ) -> CodexHistoryMessage? {
         let type = item["type"]?.stringValue
         let itemID = item["id"]?.stringValue ?? UUID().uuidString
         let messageID = appServerHistoryMessageID(turnID: turnID, itemID: itemID)
         let itemCreatedAt = firstDate(in: item, keys: ["createdAt", "created_at", "startedAt", "started_at", "timestamp"])
         let itemCompletedAt = firstDate(in: item, keys: ["completedAt", "completed_at", "updatedAt", "updated_at", "finishedAt", "finished_at", "timestamp"])
+        let processCreatedAt = itemCreatedAt ?? estimatedAt ?? startedAt ?? itemCompletedAt ?? completedAt
+        let processTimestampIsFallback = itemCreatedAt == nil && itemCompletedAt == nil && estimatedAt != nil
         switch type {
         case "userMessage":
             let text = userMessageText(from: item).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty, isVisibleUserHistoryMessage(text) else {
                 return nil
             }
+            let createdAt = itemCreatedAt ?? estimatedAt ?? startedAt ?? itemCompletedAt ?? completedAt
             return CodexHistoryMessage(
                 id: messageID,
                 role: "user",
                 content: text,
-                createdAt: itemCreatedAt ?? startedAt ?? itemCompletedAt ?? completedAt,
+                createdAt: createdAt,
                 clientMessageID: item["clientId"]?.stringValue,
                 turnID: turnID,
-                itemID: itemID
+                itemID: itemID,
+                timelineOrdinal: timelineOrdinal,
+                userDelivery: isInjectedUserMessage ? .injected : nil,
+                isTimestampFallback: itemCreatedAt == nil && itemCompletedAt == nil && estimatedAt != nil
             )
         case "agentMessage":
             let text = item["text"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -2133,31 +2172,46 @@ actor CodexAppServerSessionRuntime {
                 return nil
             }
             if item["phase"]?.stringValue == "commentary" {
-                return CodexHistoryMessage(id: messageID, role: "system", kind: .reasoningSummary, content: text, createdAt: itemCreatedAt ?? startedAt ?? itemCompletedAt ?? completedAt, turnID: turnID, itemID: itemID)
+                return CodexHistoryMessage(id: messageID, role: "system", kind: .reasoningSummary, content: text, createdAt: processCreatedAt, turnID: turnID, itemID: itemID, timelineOrdinal: timelineOrdinal, isTimestampFallback: processTimestampIsFallback)
             }
             let completed = itemCompletedAt ?? completedAt
-            return CodexHistoryMessage(id: messageID, role: "assistant", content: text, createdAt: completed ?? itemCreatedAt ?? startedAt, updatedAt: completed, turnID: turnID, itemID: itemID)
+            return CodexHistoryMessage(id: messageID, role: "assistant", content: text, createdAt: completed ?? itemCreatedAt ?? estimatedAt ?? startedAt, updatedAt: completed, turnID: turnID, itemID: itemID, timelineOrdinal: timelineOrdinal, isTimestampFallback: completed == nil && itemCreatedAt == nil && estimatedAt != nil)
         case "plan":
             let text = item["text"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !text.isEmpty else {
                 return nil
             }
-            return CodexHistoryMessage(id: messageID, role: "system", kind: .plan, content: text, createdAt: itemCreatedAt ?? startedAt ?? itemCompletedAt ?? completedAt, turnID: turnID, itemID: itemID)
+            return CodexHistoryMessage(id: messageID, role: "system", kind: .plan, content: text, createdAt: processCreatedAt, turnID: turnID, itemID: itemID, timelineOrdinal: timelineOrdinal, isTimestampFallback: processTimestampIsFallback)
         case "reasoning":
             let text = reasoningHistoryText(from: item)
             guard !text.isEmpty else {
                 return nil
             }
-            return CodexHistoryMessage(id: messageID, role: "system", kind: .reasoningSummary, content: text, createdAt: itemCreatedAt ?? startedAt ?? itemCompletedAt ?? completedAt, turnID: turnID, itemID: itemID)
+            return CodexHistoryMessage(id: messageID, role: "system", kind: .reasoningSummary, content: text, createdAt: processCreatedAt, turnID: turnID, itemID: itemID, timelineOrdinal: timelineOrdinal, isTimestampFallback: processTimestampIsFallback)
         case "commandExecution":
-            return CodexHistoryMessage(id: messageID, role: "system", kind: .commandSummary, content: commandExecutionHistoryText(from: item), createdAt: itemCreatedAt ?? startedAt ?? itemCompletedAt ?? completedAt, turnID: turnID, itemID: itemID)
+            return CodexHistoryMessage(id: messageID, role: "system", kind: .commandSummary, content: commandExecutionHistoryText(from: item), createdAt: processCreatedAt, turnID: turnID, itemID: itemID, timelineOrdinal: timelineOrdinal, isTimestampFallback: processTimestampIsFallback)
         case "fileChange":
-            return CodexHistoryMessage(id: messageID, role: "system", kind: .fileChangeSummary, content: fileChangeHistoryText(from: item), createdAt: itemCreatedAt ?? startedAt ?? itemCompletedAt ?? completedAt, turnID: turnID, itemID: itemID)
+            return CodexHistoryMessage(id: messageID, role: "system", kind: .fileChangeSummary, content: fileChangeHistoryText(from: item), createdAt: processCreatedAt, turnID: turnID, itemID: itemID, timelineOrdinal: timelineOrdinal, isTimestampFallback: processTimestampIsFallback)
         case "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "webSearch":
-            return CodexHistoryMessage(id: messageID, role: "system", kind: .commandSummary, content: toolHistoryText(from: item), createdAt: itemCreatedAt ?? startedAt ?? itemCompletedAt ?? completedAt, turnID: turnID, itemID: itemID)
+            return CodexHistoryMessage(id: messageID, role: "system", kind: .commandSummary, content: toolHistoryText(from: item), createdAt: processCreatedAt, turnID: turnID, itemID: itemID, timelineOrdinal: timelineOrdinal, isTimestampFallback: processTimestampIsFallback)
         default:
             return nil
         }
+    }
+
+    private func historyTimelineOrdinal(turnIndex: Int, itemIndex: Int) -> Int64 {
+        Int64(turnIndex) * 1_000_000 + Int64(itemIndex)
+    }
+
+    private func estimatedHistoryItemDate(startedAt: Date?, completedAt: Date?, itemIndex: Int, itemCount: Int) -> Date? {
+        guard let startedAt else {
+            return completedAt
+        }
+        guard let completedAt, completedAt > startedAt, itemCount > 1 else {
+            return startedAt.addingTimeInterval(Double(itemIndex) * 0.001)
+        }
+        let progress = Double(itemIndex) / Double(max(1, itemCount - 1))
+        return startedAt.addingTimeInterval(completedAt.timeIntervalSince(startedAt) * progress)
     }
 
     private func reasoningHistoryText(from item: [String: CodexAppServerJSONValue]) -> String {

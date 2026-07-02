@@ -115,19 +115,23 @@ actor EventReducer {
             output.foregroundUpdates.append((id, .waitingForAssistant, nil))
         case .assistantDelta(let delta, let metadata):
             let id = metadata.sessionID ?? fallbackSessionID
+            setActiveTurnIfPresent(metadata, fallbackSessionID: fallbackSessionID, output: &output)
             output.foregroundUpdates.append((id, .receivingAssistant, outputIdleClearDelay))
             output.messageMutations.append(.assistantDelta(delta, metadata, fallbackSessionID))
         case .messageCompleted(let message, let metadata):
+            setActiveTurnIfPresent(metadata, fallbackSessionID: fallbackSessionID, output: &output)
             output.messageMutations.append(.completed(message, metadata, fallbackSessionID))
             if message.role == .assistant {
                 output.foregroundClears.append(metadata.sessionID ?? message.sessionID)
             }
         case .processItemCompleted(let message, let context, let metadata):
+            setActiveTurnIfPresent(metadata, fallbackSessionID: fallbackSessionID, output: &output)
             output.messageMutations.append(.completed(message, metadata, fallbackSessionID))
             if let context {
                 output.contextUpdates.append((context, metadata.sessionID))
             }
         case .logDelta(let delta, let metadata):
+            setActiveTurnIfPresent(metadata, fallbackSessionID: fallbackSessionID, output: &output)
             output.logAppends.append(EventReducerLogAppend(
                 text: delta.text,
                 sessionID: metadata.sessionID ?? fallbackSessionID,
@@ -135,6 +139,7 @@ actor EventReducer {
             ))
         case .diffUpdated(let change, let metadata):
             let id = metadata.sessionID ?? fallbackSessionID
+            setActiveTurnIfPresent(metadata, fallbackSessionID: fallbackSessionID, output: &output)
             output.contextUpdates.append((
                 SessionContextSnapshot(
                     tasks: [SessionContextTask(id: change.path, kind: "file_change", title: "文件变更", subtitle: change.path, status: change.status)],
@@ -150,6 +155,7 @@ actor EventReducer {
             ))
         case .approvalRequest(let request, let metadata):
             let id = metadata.sessionID ?? fallbackSessionID
+            setActiveTurnIfPresent(metadata, fallbackSessionID: fallbackSessionID, output: &output)
             output.statusUpdates.append((id, "waiting_for_approval"))
             // 输入框上方的审批卡读取 session.pendingApproval；审批事件不能只写入时间线记录。
             output.pendingApprovalUpdates.append((
@@ -169,6 +175,7 @@ actor EventReducer {
             output.messageMutations.append(.system("等待审批：\(request.title)\(risk)", id, .approval, metadata))
         case .approvalResolved(let metadata):
             let id = metadata.sessionID ?? fallbackSessionID
+            setActiveTurnIfPresent(metadata, fallbackSessionID: fallbackSessionID, output: &output)
             // app-server 会在 JSON-RPC server request 被处理后发 serverRequest/resolved；
             // 这里只收起 pending 卡片，并把本地等待态恢复为运行态，避免历史审批残留挡住输入框。
             output.pendingApprovalUpdates.append((id, nil))
@@ -181,6 +188,7 @@ actor EventReducer {
             output.messageMutations.append(.resolveLatestPendingApproval(id))
         case .userInputRequest(let request, let metadata):
             let id = metadata.sessionID ?? request.threadID
+            setActiveTurnIfPresent(metadata, fallbackSessionID: fallbackSessionID, output: &output)
             output.statusUpdates.append((id, "waiting_for_input"))
             // request_user_input 是 turn 内部的补充信息阻塞点；写入 session 后输入框上方渲染补充信息卡。
             output.pendingUserInputUpdates.append((id, request))
@@ -196,6 +204,7 @@ actor EventReducer {
             output.messageMutations.append(.system("等待补充信息：\(request.title)", id, .userInput, metadata))
         case .userInputResolved(let metadata, let skipped):
             let id = metadata.sessionID ?? fallbackSessionID
+            setActiveTurnIfPresent(metadata, fallbackSessionID: fallbackSessionID, output: &output)
             output.pendingUserInputUpdates.append((id, nil))
             output.statusUpdates.append((id, "running"))
             output.contextUpdates.append((
@@ -246,6 +255,17 @@ actor EventReducer {
         }
 
         return output
+    }
+
+    private func setActiveTurnIfPresent(
+        _ metadata: AgentEventMetadata,
+        fallbackSessionID: SessionID,
+        output: inout EventReducerOutput
+    ) {
+        guard let turnID = metadata.turnID, !turnID.isEmpty else {
+            return
+        }
+        output.activeTurnMutations.append(.set(metadata.sessionID ?? fallbackSessionID, turnID))
     }
 
     private func contextStatusType(from status: String) -> String {

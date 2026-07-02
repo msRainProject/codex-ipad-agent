@@ -840,28 +840,27 @@ struct ComposerView: View {
 
     @ViewBuilder
     private var toolbarMenuRow: some View {
-        // 这里保留输入框内部的内容/设置入口；目标和计划是高频模式，放到右侧语音入口上方。
         HStack(spacing: 8) {
             addContentButton
             composerMoreMenu
+            composerModeControls
         }
         .font(themeStore.uiFont(.caption, weight: .medium))
         .controlSize(.small)
     }
 
     private var composerVoiceActionColumn: some View {
-        VStack(alignment: .trailing, spacing: voiceActionColumnSpacing) {
-            HStack(spacing: 6) {
-                goalButton
-                planButton
-            }
-            .font(themeStore.uiFont(.caption, weight: .medium))
-            .controlSize(.small)
-            .frame(height: voiceModeRowHeight, alignment: .trailing)
-
+        VStack(alignment: .trailing, spacing: 0) {
             voiceMicControl
         }
         .frame(width: voiceActionColumnWidth, alignment: .trailing)
+    }
+
+    private var composerModeControls: some View {
+        HStack(spacing: 6) {
+            goalButton
+            planButton
+        }
     }
 
     private var voiceMicControl: some View {
@@ -1234,17 +1233,17 @@ struct ComposerView: View {
                 Image(systemName: "checkmark.shield")
                 Text("语音草稿待确认")
                     .lineLimit(1)
-                Spacer(minLength: 0)
             }
             .font(themeStore.uiFont(.caption, weight: .medium))
             .foregroundStyle(themeStore.tokens(for: colorScheme).accent)
             .padding(.horizontal, 9)
-            .frame(height: 30)
+            .frame(height: 28)
             .background(themeStore.tokens(for: colorScheme).accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .strokeBorder(themeStore.tokens(for: colorScheme).accent.opacity(0.35))
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -1762,6 +1761,13 @@ struct ComposerView: View {
         if usesCollapsedComposerTextHeight {
             return isCompactComposer ? 38 : 34
         }
+        if composerState.hasNonWhitespaceDraft {
+            // 单行文字输入不要被强行撑成大文本框；内容增多时高度仍由 UIKit 测量值继续向上扩展。
+            return isCompactComposer ? 44 : 48
+        }
+        if !composerState.attachments.isEmpty || composerState.voiceDraftNeedsReview {
+            return isCompactComposer ? 52 : 56
+        }
         if isCompactComposer {
             return 60
         }
@@ -1793,21 +1799,7 @@ struct ComposerView: View {
     }
 
     private var voiceActionColumnWidth: CGFloat {
-        if (availableWidth ?? 920) < 360 {
-            return 92
-        }
-        if isCompactComposer {
-            return 96
-        }
-        return 154
-    }
-
-    private var voiceActionColumnSpacing: CGFloat {
-        (availableWidth ?? 920) < 360 ? 6 : 8
-    }
-
-    private var voiceModeRowHeight: CGFloat {
-        composerModeButtonShowsTitle ? 34 : 32
+        voiceButtonWidth
     }
 
     private var voiceButtonWidth: CGFloat {
@@ -1822,14 +1814,23 @@ struct ComposerView: View {
     }
 
     private var voiceButtonHeight: CGFloat {
-        let availableHeight = measuredComposerCardHeight > 0
-            ? measuredComposerCardHeight - voiceModeRowHeight - voiceActionColumnSpacing
-            : 108
-        return max(72, availableHeight)
+        let measuredHeight = measuredComposerCardHeight > 0 ? measuredComposerCardHeight : estimatedComposerCardHeight
+        return max(voiceButtonMinimumHeight, measuredHeight)
     }
 
     private var voiceButtonShowsTitle: Bool {
         voiceButtonWidth >= 96 && !isCompactComposer
+    }
+
+    private var estimatedComposerCardHeight: CGFloat {
+        let toolbarHeight: CGFloat = 46
+        let reviewHeight = composerState.voiceDraftNeedsReview ? 28 + composerCardSpacing : 0
+        // 首次布局还没有 GeometryReader 回传高度时，用同一套尺寸预估，避免右侧语音按钮首帧跳动。
+        return composerTextHeight + toolbarHeight + reviewHeight + composerCardPadding * 2 + composerCardSpacing
+    }
+
+    private var voiceButtonMinimumHeight: CGFloat {
+        isCompactComposer ? 82 : 96
     }
 
     private var composerCardPadding: CGFloat {

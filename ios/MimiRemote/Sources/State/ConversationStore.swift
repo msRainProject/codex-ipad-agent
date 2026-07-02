@@ -54,6 +54,8 @@ final class ConversationStore: ObservableObject {
         let seq: EventSequence?
         let revision: ModelRevision?
         let sendStatus: MessageSendStatus?
+        let timelineOrdinal: Int64?
+        let userDelivery: UserMessageDelivery?
         let isTimestampFallback: Bool
     }
 
@@ -76,6 +78,8 @@ final class ConversationStore: ObservableObject {
         let updatedAt: Date?
         let sendStatus: MessageSendStatus
         let revision: ModelRevision?
+        let timelineOrdinal: Int64?
+        let userDelivery: UserMessageDelivery?
         let isTimestampFallback: Bool
     }
 
@@ -158,6 +162,7 @@ final class ConversationStore: ObservableObject {
         clientMessageID: ClientMessageID?,
         sendStatus: MessageSendStatus = .sending,
         turnPayload: CodexAppServerTurnPayload? = nil,
+        userDelivery: UserMessageDelivery? = nil,
         createdAt: Date? = nil
     ) {
         if let clientMessageID,
@@ -172,6 +177,7 @@ final class ConversationStore: ObservableObject {
             list[index].content = text
             list[index].sendStatus = sendStatus
             list[index].turnPayload = turnPayload ?? list[index].turnPayload
+            list[index].userDelivery = userDelivery ?? list[index].userDelivery
             list[index].updatedAt = Date()
             replaceMessagesWithoutEquivalenceCheck(list, sessionID: sessionID, rebuildIndexes: false)
             return
@@ -184,7 +190,8 @@ final class ConversationStore: ObservableObject {
                 content: text,
                 createdAt: createdAt ?? Date(),
                 sendStatus: sendStatus,
-                turnPayload: turnPayload
+                turnPayload: turnPayload,
+                userDelivery: userDelivery
             ),
             sessionID: sessionID
         )
@@ -526,6 +533,7 @@ final class ConversationStore: ObservableObject {
             list[index].revision = message.revision
             list[index].updatedAt = message.updatedAt ?? metadata.createdAt ?? Date()
             list[index].isTimestampFallback = message.isTimestampFallback
+            list[index].userDelivery = nil
             if clientMessageID != nil, message.sendStatus != .failed {
                 let retained = list[index].turnPayload?.retainedAfterAcceptedSend()
                 if list[index].turnPayload != retained {
@@ -827,6 +835,9 @@ final class ConversationStore: ObservableObject {
             && lhs.updatedAt == rhs.updatedAt
             && lhs.sendStatus == rhs.sendStatus
             && lhs.revision == rhs.revision
+            && lhs.timelineOrdinal == rhs.timelineOrdinal
+            && lhs.userDelivery == rhs.userDelivery
+            && lhs.isTimestampFallback == rhs.isTimestampFallback
             && lhs.contentDigest == rhs.contentDigest
             && lhs.contentByteCount == rhs.contentByteCount
     }
@@ -937,8 +948,10 @@ final class ConversationStore: ObservableObject {
         var historyTurnScopedTextKeys = Set<String>()
         var nearbyHistoryEchoCandidates: [NearbyHistoryEchoCandidate] = []
         var merged: [ConversationMessage] = []
+        let liveBackfill = liveBackfillCandidates(from: local)
 
-        for item in history {
+        for rawItem in history {
+            let item = historyMessageByBackfillingLiveFacts(rawItem, candidates: liveBackfill)
             guard seenUUIDs.insert(item.id).inserted else {
                 continue
             }
@@ -977,14 +990,138 @@ final class ConversationStore: ObservableObject {
             merged.append(item)
         }
 
-        return merged.enumerated()
-            .sorted { lhs, rhs in
-                if lhs.element.createdAt == rhs.element.createdAt {
-                    return lhs.offset < rhs.offset
-                }
-                return lhs.element.createdAt < rhs.element.createdAt
+        return timelineSortEntries(from: merged)
+            .sorted(by: areTimelineSortEntriesInOrder)
+            .map(\.message)
+    }
+
+    private struct LiveBackfillCandidates {
+        var byPrimaryKey: [String: ConversationMessage] = [:]
+        var byTurnScopedTextKey: [String: ConversationMessage] = [:]
+    }
+
+    private func liveBackfillCandidates(from local: [ConversationMessage]) -> LiveBackfillCandidates {
+        var result = LiveBackfillCandidates()
+        for message in local {
+            if let key = primaryMergeKey(for: message) {
+                result.byPrimaryKey[key] = bestLiveBackfill(existing: result.byPrimaryKey[key], candidate: message)
             }
-            .map(\.element)
+            if let key = turnScopedTextMergeKey(for: message) {
+                result.byTurnScopedTextKey[key] = bestLiveBackfill(existing: result.byTurnScopedTextKey[key], candidate: message)
+            }
+        }
+        return result
+    }
+
+    private func bestLiveBackfill(existing: ConversationMessage?, candidate: ConversationMessage) -> ConversationMessage {
+        guard let existing else {
+            return candidate
+        }
+        if existing.isTimestampFallback != candidate.isTimestampFallback {
+            return candidate.isTimestampFallback ? existing : candidate
+        }
+        return candidate.createdAt >= existing.createdAt ? candidate : existing
+    }
+
+    private func historyMessageByBackfillingLiveFacts(_ history: ConversationMessage, candidates: LiveBackfillCandidates) -> ConversationMessage {
+        let candidate = primaryMergeKey(for: history).flatMap { candidates.byPrimaryKey[$0] }
+            ?? turnScopedTextMergeKey(for: history).flatMap { candidates.byTurnScopedTextKey[$0] }
+        guard let candidate else {
+            return history
+        }
+        var next = history
+        if history.isTimestampFallback && !candidate.isTimestampFallback {
+            next.createdAt = candidate.createdAt
+            next.updatedAt = candidate.updatedAt ?? history.updatedAt
+            next.isTimestampFallback = false
+        } else if history.isTimestampFallback, candidate.createdAt != history.createdAt {
+            next.createdAt = candidate.createdAt
+            next.updatedAt = candidate.updatedAt ?? history.updatedAt
+        }
+        return next
+    }
+
+    private struct TimelineSortEntry {
+        let offset: Int
+        let message: ConversationMessage
+        let effectiveAt: Date
+        let timelineOrdinal: Int64?
+    }
+
+    private func timelineSortEntries(from messages: [ConversationMessage]) -> [TimelineSortEntry] {
+        var entries = messages.enumerated().map { offset, message in
+            TimelineSortEntry(
+                offset: offset,
+                message: message,
+                effectiveAt: message.createdAt,
+                timelineOrdinal: message.timelineOrdinal
+            )
+        }
+        var ordinalIndicesByTurn: [TurnID: [Int]] = [:]
+        for (index, message) in messages.enumerated() {
+            guard let turnID = message.turnID,
+                  message.timelineOrdinal != nil else {
+                continue
+            }
+            ordinalIndicesByTurn[turnID, default: []].append(index)
+        }
+
+        for indices in ordinalIndicesByTurn.values {
+            var runningMax: Date?
+            for index in indices.sorted(by: { leftIndex, rightIndex in
+                compareTimelineOrdinalThenOffset(leftIndex, rightIndex, entries: entries)
+            }) {
+                let entry = entries[index]
+                let effectiveAt: Date
+                if let runningMax, entry.effectiveAt < runningMax {
+                    effectiveAt = runningMax
+                } else {
+                    effectiveAt = entry.effectiveAt
+                }
+                // history item 用 live 副本回填真实时间后，时间和 thread/read item 顺序可能短暂反挂。
+                // 同 turn 内先把 ordinal 骨架的时间单调化，再统一排序，避免 Swift sort 遇到非传递比较器。
+                entries[index] = TimelineSortEntry(
+                    offset: entry.offset,
+                    message: entry.message,
+                    effectiveAt: effectiveAt,
+                    timelineOrdinal: entry.timelineOrdinal
+                )
+                runningMax = effectiveAt
+            }
+        }
+
+        return entries
+    }
+
+    private func compareTimelineOrdinalThenOffset(
+        _ leftIndex: Int,
+        _ rightIndex: Int,
+        entries: [TimelineSortEntry]
+    ) -> Bool {
+        let left = entries[leftIndex]
+        let right = entries[rightIndex]
+        if let leftOrdinal = left.timelineOrdinal,
+           let rightOrdinal = right.timelineOrdinal,
+           leftOrdinal != rightOrdinal {
+            return leftOrdinal < rightOrdinal
+        }
+        return left.offset < right.offset
+    }
+
+    private func areTimelineSortEntriesInOrder(_ lhs: TimelineSortEntry, _ rhs: TimelineSortEntry) -> Bool {
+        if lhs.effectiveAt != rhs.effectiveAt {
+            return lhs.effectiveAt < rhs.effectiveAt
+        }
+        switch (lhs.timelineOrdinal, rhs.timelineOrdinal) {
+        case (.some(let leftOrdinal), .some(let rightOrdinal)) where leftOrdinal != rightOrdinal:
+            return leftOrdinal < rightOrdinal
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        default:
+            return lhs.offset < rhs.offset
+        }
     }
 
     private func projectedHistoryMessages(_ history: [CodexHistoryMessage], sessionID: String) -> [ConversationMessage] {
@@ -1093,6 +1230,8 @@ final class ConversationStore: ObservableObject {
                       updatedAt: item.updatedAt,
                       sendStatus: sendStatus,
                       revision: item.revision,
+                      timelineOrdinal: item.timelineOrdinal,
+                      userDelivery: item.userDelivery,
                       isTimestampFallback: isTimestampFallback,
                       buckets: &unstableReuseBuckets
                   ) {
@@ -1113,6 +1252,8 @@ final class ConversationStore: ObservableObject {
             updatedAt: item.updatedAt,
             sendStatus: sendStatus,
             revision: item.revision,
+            timelineOrdinal: item.timelineOrdinal,
+            userDelivery: item.userDelivery,
             isTimestampFallback: isTimestampFallback
         )
     }
@@ -1207,6 +1348,8 @@ final class ConversationStore: ObservableObject {
             updatedAt: message.updatedAt,
             sendStatus: message.sendStatus,
             revision: message.revision,
+            timelineOrdinal: message.timelineOrdinal,
+            userDelivery: message.userDelivery,
             isTimestampFallback: message.isTimestampFallback
         )
     }
@@ -1219,6 +1362,8 @@ final class ConversationStore: ObservableObject {
         updatedAt: Date?,
         sendStatus: MessageSendStatus,
         revision: ModelRevision?,
+        timelineOrdinal: Int64?,
+        userDelivery: UserMessageDelivery?,
         isTimestampFallback: Bool,
         buckets: inout [UnstableHistoryReuseKey: UnstableHistoryReuseBucket]
     ) -> ConversationMessage? {
@@ -1230,6 +1375,8 @@ final class ConversationStore: ObservableObject {
             updatedAt: updatedAt,
             sendStatus: sendStatus,
             revision: revision,
+            timelineOrdinal: timelineOrdinal,
+            userDelivery: userDelivery,
             isTimestampFallback: isTimestampFallback
         )
         guard var bucket = buckets[key] else {
@@ -1265,6 +1412,8 @@ final class ConversationStore: ObservableObject {
             seq: item.seq,
             revision: item.revision,
             sendStatus: item.sendStatus,
+            timelineOrdinal: item.timelineOrdinal,
+            userDelivery: item.userDelivery,
             isTimestampFallback: item.isTimestampFallback
         )
     }

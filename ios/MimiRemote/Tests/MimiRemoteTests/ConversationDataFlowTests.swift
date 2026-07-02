@@ -655,6 +655,7 @@ final class ConversationDataFlowTests: XCTestCase {
         )
 
         XCTAssertEqual(output.foregroundUpdates.count, 1)
+        XCTAssertEqual(output.activeTurnMutations.count, 1)
         XCTAssertEqual(output.logAppends.count, 0)
         XCTAssertEqual(output.messageMutations.count, 1)
         if case .assistantDelta(let delta, let returnedMetadata, let fallbackSessionID) = output.messageMutations[0] {
@@ -1431,7 +1432,8 @@ final class ConversationDataFlowTests: XCTestCase {
                 turnID: turnID,
                 itemID: historyItemID,
                 revision: 1,
-                sendStatus: .confirmed
+                sendStatus: .confirmed,
+                isTimestampFallback: true
             )
         ], sessionID: sessionID)
 
@@ -1441,7 +1443,7 @@ final class ConversationDataFlowTests: XCTestCase {
         XCTAssertEqual(messages.first?.content, answer)
     }
 
-    func testHistoryDeduplicatesLiveProcessMessagesWhenThreadReadRenumbersItemID() {
+    func testHistoryDeduplicatesLiveProcessMessagesWhenThreadReadRenumbersItemID() throws {
         // 过程卡和最终 assistant 一样会遇到 thread/read 重排 item id；同一 turn、同一类过程卡、
         // 同一文本应保留历史快照，丢弃 websocket replay 的直播副本。
         let store = ConversationStore()
@@ -1488,7 +1490,8 @@ final class ConversationDataFlowTests: XCTestCase {
                 turnID: turnID,
                 itemID: historyItemID,
                 revision: 1,
-                sendStatus: .confirmed
+                sendStatus: .confirmed,
+                isTimestampFallback: true
             )
         ], sessionID: sessionID)
 
@@ -1497,7 +1500,107 @@ final class ConversationDataFlowTests: XCTestCase {
         XCTAssertEqual(messages.first?.role, .system)
         XCTAssertEqual(messages.first?.kind, .reasoningSummary)
         XCTAssertEqual(messages.first?.content, summary)
-        XCTAssertEqual(messages.first?.createdAt, Date(timeIntervalSince1970: 10), "去重后应保留历史时间，避免 replay 版本显示成刚刚发生")
+        XCTAssertEqual(messages.first?.createdAt, Date(timeIntervalSince1970: 20), "去重后应保留 history 身份，但回填 live 真实时间，避免历史刷新把过程项拖回 turn.startedAt")
+        XCTAssertFalse(try XCTUnwrap(messages.first).isTimestampFallback)
+    }
+
+    func testHistoryMergePlacesLiveOnlyCommandBetweenEstimatedHistoryNeighbors() {
+        let store = ConversationStore()
+        let sessionID = "thread_live_command_order"
+        let turnID = "turn_live_command_order"
+
+        store.appendSystem(
+            "命令：grep -n activeTurnID",
+            sessionID: sessionID,
+            kind: .commandSummary,
+            metadata: AgentEventMetadata(
+                seq: 2,
+                sessionID: sessionID,
+                turnID: turnID,
+                itemID: "cmd_live_only",
+                messageID: "cmd_live_only",
+                clientMessageID: nil,
+                revision: 1,
+                createdAt: Date(timeIntervalSince1970: 20)
+            )
+        )
+        store.setHistory([
+            CodexHistoryMessage(
+                id: "user_history_order",
+                role: "user",
+                content: "先排查",
+                createdAt: Date(timeIntervalSince1970: 10),
+                turnID: turnID,
+                itemID: "user_history_order",
+                timelineOrdinal: 0,
+                isTimestampFallback: true
+            ),
+            CodexHistoryMessage(
+                id: "plan_history_order",
+                role: "system",
+                kind: .plan,
+                content: "修复历史排序",
+                createdAt: Date(timeIntervalSince1970: 30),
+                turnID: turnID,
+                itemID: "plan_history_order",
+                timelineOrdinal: 2,
+                isTimestampFallback: true
+            )
+        ], sessionID: sessionID)
+
+        XCTAssertEqual(
+            store.messages(for: sessionID).map(\.content),
+            ["先排查", "命令：grep -n activeTurnID", "修复历史排序"]
+        )
+    }
+
+    func testHistoryMergeKeepsStableOrderWhenOrdinalAndLiveTimesConflict() {
+        let store = ConversationStore()
+        let sessionID = "thread_conflicting_timeline_order"
+        let turnID = "turn_conflicting_timeline_order"
+
+        store.appendSystem(
+            "命令：sed -n '1,40p' EventReducer.swift",
+            sessionID: sessionID,
+            kind: .commandSummary,
+            metadata: AgentEventMetadata(
+                seq: 2,
+                sessionID: sessionID,
+                turnID: turnID,
+                itemID: "cmd_live_conflict",
+                messageID: "cmd_live_conflict",
+                clientMessageID: nil,
+                revision: 1,
+                createdAt: Date(timeIntervalSince1970: 120)
+            )
+        )
+        store.setHistory([
+            CodexHistoryMessage(
+                id: "plan_conflict",
+                role: "system",
+                kind: .plan,
+                content: "先给出计划。",
+                createdAt: Date(timeIntervalSince1970: 131),
+                turnID: turnID,
+                itemID: "plan_conflict",
+                timelineOrdinal: 5
+            ),
+            CodexHistoryMessage(
+                id: "user_conflict",
+                role: "user",
+                content: "要求后续变更",
+                createdAt: Date(timeIntervalSince1970: 104),
+                turnID: turnID,
+                itemID: "user_conflict",
+                timelineOrdinal: 6,
+                userDelivery: .injected
+            )
+        ], sessionID: sessionID)
+
+        XCTAssertEqual(
+            store.messages(for: sessionID).map(\.content),
+            ["命令：sed -n '1,40p' EventReducer.swift", "先给出计划。", "要求后续变更"]
+        )
     }
 
     func testHistoryKeepsDistinctProcessMessagesInSameTurn() {
@@ -1530,7 +1633,7 @@ final class ConversationDataFlowTests: XCTestCase {
         XCTAssertEqual(messages.map(\.content), ["先读取本地实现。", "再和 Codex CLI 对齐。"])
     }
 
-    func testStructuredHistoryProcessMessagesCollapseBeforeFinalAssistant() throws {
+    func testStructuredHistoryProcessMessagesCollapseBeforeFinalAssistantAndPinsPlanAfterAnswer() throws {
         let store = ConversationStore()
         let sessionID = "sess_history_processed"
         let turnID = "turn_history_processed"
@@ -1574,17 +1677,22 @@ final class ConversationDataFlowTests: XCTestCase {
 
         let items = ConversationTimelineItemBuilder.items(from: store.messages(for: sessionID))
 
-        XCTAssertEqual(items.count, 3)
+        XCTAssertEqual(items.count, 4)
         guard case .processed(let group) = items[1] else {
             return XCTFail("history 过程消息应该折叠到最终 assistant 前")
         }
-        XCTAssertEqual(group.messages.map(\.content), ["我先调用一个子 agent。", "让子 agent 生成一个短笑话。"])
-        XCTAssertEqual(group.title, "已处理 2 步 · 34s")
+        XCTAssertEqual(group.messages.map(\.content), ["我先调用一个子 agent。"])
+        XCTAssertEqual(group.title, "已处理 1 步 · 34s")
         guard case .message(let final) = items[2] else {
             return XCTFail("最终 assistant 应保持独立展开")
         }
         XCTAssertEqual(final.role, .assistant)
         XCTAssertEqual(final.content, "程序员相亲，对方问：你会浪漫吗？")
+        guard case .message(let plan) = items[3] else {
+            return XCTFail("计划卡应固定在最终回答之后，作为一级卡片展示")
+        }
+        XCTAssertEqual(plan.kind, .plan)
+        XCTAssertEqual(plan.content, "让子 agent 生成一个短笑话。")
     }
 
     func testHistoryDeduplicatesClientMessageEcho() {
@@ -7499,6 +7607,119 @@ final class ConversationDataFlowTests: XCTestCase {
         XCTAssertEqual(sockets[0].sentGuidance.first?.expectedTurnID, "turn_from_event")
     }
 
+    func testRunningSessionGuidedDeliveryBackfillsActiveTurnFromAssistantDelta() async throws {
+        let project = makeProject(id: "proj_ws_guided_delta")
+        let running = makeSession(id: "sess_ws_guided_delta", projectID: project.id, title: "Running", status: "running", source: "codex")
+        let appStore = AppStore()
+        appStore.token = "test-token"
+        let client = MockSessionStoreClient(projects: [project], sessions: [running], messagesResult: [])
+        let conversationStore = ConversationStore()
+        var sockets: [MockWebSocketClient] = []
+        let store = SessionStore(
+            appStore: appStore,
+            conversationStore: conversationStore,
+            logStore: LogStore(),
+            clientFactory: { client },
+            webSocketFactory: {
+                let socket = MockWebSocketClient()
+                sockets.append(socket)
+                return socket
+            }
+        )
+
+        await store.refreshAll(autoAttach: false)
+        store.takeOverSession(running)
+        await store.selectSession(running)
+        sockets[0].emitStatus(.connected)
+        try await waitForWebSocketStatus(.connected, store: store)
+
+        sockets[0].emitEvent(.assistantDelta(
+            AgentDelta(text: "正在继续", role: .assistant, kind: .message),
+            AgentEventMetadata(
+                seq: 1,
+                sessionID: running.id,
+                turnID: "turn_from_delta",
+                itemID: "assistant_delta",
+                messageID: "assistant_delta",
+                clientMessageID: nil,
+                revision: 1,
+                createdAt: nil
+            )
+        ))
+        try await waitForSelectedActiveTurnID("turn_from_delta", store: store)
+
+        let guided = await store.sendTurn(CodexAppServerTurnPayload(prompt: "沿着这个回复继续"), runningDelivery: .guided)
+
+        XCTAssertTrue(guided)
+        XCTAssertEqual(sockets[0].sentGuidance.count, 1)
+        XCTAssertEqual(sockets[0].sentGuidance.first?.expectedTurnID, "turn_from_delta")
+    }
+
+    func testLateRuntimeEventDoesNotRestoreActiveTurnAfterCompletion() async throws {
+        let project = makeProject(id: "proj_ws_late_turn")
+        let running = makeSession(
+            id: "sess_ws_late_turn",
+            projectID: project.id,
+            title: "Running",
+            status: "running",
+            source: "codex",
+            activeTurnID: "turn_late"
+        )
+        let appStore = AppStore()
+        appStore.token = "test-token"
+        let client = MockSessionStoreClient(projects: [project], sessions: [running], messagesResult: [])
+        let conversationStore = ConversationStore()
+        var sockets: [MockWebSocketClient] = []
+        let store = SessionStore(
+            appStore: appStore,
+            conversationStore: conversationStore,
+            logStore: LogStore(),
+            clientFactory: { client },
+            webSocketFactory: {
+                let socket = MockWebSocketClient()
+                sockets.append(socket)
+                return socket
+            }
+        )
+
+        await store.refreshAll(autoAttach: false)
+        store.takeOverSession(running)
+        await store.selectSession(running)
+        sockets[0].emitStatus(.connected)
+        try await waitForWebSocketStatus(.connected, store: store)
+
+        sockets[0].emitEvent(.turnCompleted(AgentEventMetadata(
+            seq: 2,
+            sessionID: running.id,
+            turnID: "turn_late",
+            itemID: nil,
+            messageID: nil,
+            clientMessageID: nil,
+            revision: nil,
+            createdAt: nil
+        )))
+        try await waitForSelectedActiveTurnID(nil, store: store)
+        try await waitForSelectedSessionStatus(SessionStatus.completed.rawValue, store: store)
+
+        sockets[0].emitEvent(.assistantDelta(
+            AgentDelta(text: "迟到片段", role: .assistant, kind: .message),
+            AgentEventMetadata(
+                seq: 3,
+                sessionID: running.id,
+                turnID: "turn_late",
+                itemID: "assistant_late",
+                messageID: "assistant_late",
+                clientMessageID: nil,
+                revision: 1,
+                createdAt: nil
+            )
+        ))
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        XCTAssertNil(store.selectedSession?.activeTurnID)
+        XCTAssertEqual(store.selectedSession?.status, SessionStatus.completed.rawValue)
+    }
+
     func testRunningSessionSendWaitsForConnectedWebSocket() async throws {
         let project = makeProject(id: "proj_ws_connecting_guard")
         let running = makeSession(id: "sess_ws_connecting_guard", projectID: project.id, title: "连接中", status: "running", source: "codex")
@@ -9930,6 +10151,76 @@ extension ConversationDataFlowTests {
         socket.disconnect()
     }
 
+    func testDirectRuntimeBackfillsActiveTurnFromDeltaBeforeGuidance() async throws {
+        let project = AgentProject(id: "proj_delta_guidance", name: "Delta Guidance", path: "/tmp/delta-guidance")
+        let transport = FakeCodexAppServerTransport()
+        let runtime = CodexAppServerSessionRuntime(
+            endpoint: "http://127.0.0.1:8787",
+            token: "outer-token",
+            transportFactory: { transport },
+            configProvider: { makeDirectAppServerConfig(project: project) }
+        )
+        let client = CodexAppServerSessionAPIClient(runtime: runtime)
+
+        let listTask = Task {
+            try await client.sessions(projectID: project.id, cursor: nil, limit: nil)
+        }
+        let initialize = try await waitForFakeAppServerRequest(transport, method: "initialize")
+        assertInitializeEnablesExperimentalAPI(initialize)
+        transportResponse(transport, id: initialize.id, result: #"{"userAgent":"fake-codex","platformFamily":"macos"}"#)
+        let threadList = try await waitForFakeAppServerRequest(transport, method: "thread/list", after: 1)
+        transportResponse(transport, id: threadList.id, result: #"{"data":[{"id":"thr_delta_guidance","sessionId":"thr_delta_guidance","preview":"delta 回填","ephemeral":false,"modelProvider":"openai","createdAt":1780490900,"updatedAt":1780490901,"status":{"type":"idle"},"path":null,"cwd":"/tmp/delta-guidance","cliVersion":"0.0.0","source":"appServer","threadSource":"user","name":"delta 回填","turns":[]}],"nextCursor":null}"#)
+        _ = try await listTask.value
+
+        let socket = CodexAppServerSessionWebSocketClient(runtime: runtime)
+        var statuses: [WebSocketStatus] = []
+        var events: [AgentEvent] = []
+        socket.onStatus = { statuses.append($0) }
+        socket.onEvent = { events.append($0) }
+        socket.connect(sessionID: "thr_delta_guidance")
+
+        let resume = try await waitForFakeAppServerRequest(transport, method: "thread/resume", after: 3)
+        transportResponse(transport, id: resume.id, result: #"{"thread":{"id":"thr_delta_guidance","sessionId":"thr_delta_guidance","preview":"delta 回填","ephemeral":false,"modelProvider":"openai","createdAt":1780490900,"updatedAt":1780490902,"status":{"type":"idle"},"path":null,"cwd":"/tmp/delta-guidance","cliVersion":"0.0.0","source":"appServer","threadSource":"user","name":"delta 回填","turns":[]}}"#)
+
+        for _ in 0..<200 where !statuses.contains(.connected) {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertTrue(statuses.contains(.connected))
+
+        // 模拟重连后漏掉 turn/started，但先收到带 turnId 的流式输出。
+        // UI reducer 已经会开放“引导当前回复”，runtime 自己的 context 也必须同步回填，否则 steerTurn 会误拒发。
+        transport.enqueue(#"{"method":"item/agentMessage/delta","params":{"threadId":"thr_delta_guidance","turnId":"turn_delta_guidance","itemId":"assistant_delta_guidance","delta":"正在继续"}}"#)
+        for _ in 0..<200 where !events.contains(where: {
+            if case .assistantDelta(let delta, _) = $0 {
+                return delta.text == "正在继续"
+            }
+            return false
+        }) {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertTrue(events.contains {
+            if case .assistantDelta(let delta, _) = $0 {
+                return delta.text == "正在继续"
+            }
+            return false
+        })
+
+        XCTAssertTrue(socket.sendGuidance(
+            CodexAppServerTurnPayload(prompt: "沿着当前回复继续"),
+            clientMessageID: "client_delta_guidance",
+            expectedTurnID: "turn_delta_guidance"
+        ))
+        let steer = try await waitForFakeAppServerRequest(transport, method: "turn/steer", after: 4)
+        let steerParams = try XCTUnwrap(steer.params?.objectValue)
+        XCTAssertEqual(steerParams["threadId"]?.stringValue, "thr_delta_guidance")
+        XCTAssertEqual(steerParams["expectedTurnId"]?.stringValue, "turn_delta_guidance")
+        XCTAssertEqual(steerParams["clientUserMessageId"]?.stringValue, "client_delta_guidance")
+        XCTAssertEqual(steerParams["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue, "沿着当前回复继续")
+        transportResponse(transport, id: steer.id, result: #"{}"#)
+
+        socket.disconnect()
+    }
+
     func testDirectRuntimeRetriesModelListAfterStaleInitializationError() async throws {
         let project = AgentProject(id: "proj_stale_model", name: "Stale Model", path: "/tmp/stale-model")
         let pool = FakeCodexAppServerTransportPool()
@@ -10794,7 +11085,14 @@ extension ConversationDataFlowTests {
         XCTAssertEqual(try XCTUnwrap(snakeAssistant.createdAt).timeIntervalSince1970, 1_782_932_402, accuracy: 0.001)
         XCTAssertEqual(try XCTUnwrap(itemUser.createdAt).timeIntervalSince1970, 1_782_932_403, accuracy: 0.001)
         XCTAssertEqual(try XCTUnwrap(itemAssistant.createdAt).timeIntervalSince1970, 1_782_932_404.5, accuracy: 0.001)
-        XCTAssertFalse(page.messages.contains { $0.isTimestampFallback })
+        XCTAssertTrue(isoUser.isTimestampFallback)
+        XCTAssertFalse(isoAssistant.isTimestampFallback)
+        XCTAssertTrue(msUser.isTimestampFallback)
+        XCTAssertFalse(msAssistant.isTimestampFallback)
+        XCTAssertTrue(snakeUser.isTimestampFallback)
+        XCTAssertFalse(snakeAssistant.isTimestampFallback)
+        XCTAssertFalse(itemUser.isTimestampFallback)
+        XCTAssertFalse(itemAssistant.isTimestampFallback)
     }
 
     func testDirectRuntimeMarksMissingHistoryTimestampsAsFallback() async throws {
@@ -10823,6 +11121,37 @@ extension ConversationDataFlowTests {
         XCTAssertTrue(page.messages.allSatisfy(\.isTimestampFallback))
         XCTAssertEqual(try XCTUnwrap(page.messages.first?.createdAt).timeIntervalSince1970, 1_780_490_500, accuracy: 0.001)
         XCTAssertEqual(try XCTUnwrap(page.messages.last?.createdAt).timeIntervalSince1970, 1_780_490_500, accuracy: 0.001)
+    }
+
+    func testDirectRuntimeMarksMiddleUserMessageAsInjectedServerFact() async throws {
+        let project = AgentProject(id: "proj_hist_injected", name: "Hist Injected", path: "/tmp/hist-injected")
+        let transport = FakeCodexAppServerTransport()
+        let runtime = CodexAppServerSessionRuntime(
+            endpoint: "http://127.0.0.1:8787",
+            token: "outer-token",
+            transportFactory: { transport },
+            configProvider: { makeDirectAppServerConfig(project: project) }
+        )
+        let client = CodexAppServerSessionAPIClient(runtime: runtime)
+
+        let pageTask = Task {
+            try await client.messagesPage(sessionID: "thr_hist_injected", before: nil, limit: 10)
+        }
+
+        let initialize = try await waitForFakeAppServerRequest(transport, method: "initialize")
+        transport.enqueue(#"{"id":\#(try jsonFragment(for: initialize.id)),"result":{"userAgent":"fake-codex","platformFamily":"macos"}}"#)
+
+        let read = try await waitForFakeAppServerRequest(transport, method: "thread/read")
+        transport.enqueue(#"{"id":\#(try jsonFragment(for: read.id)),"result":{"thread":{"id":"thr_hist_injected","sessionId":"thr_hist_injected","preview":"injected","ephemeral":false,"modelProvider":"openai","createdAt":1780490600,"updatedAt":1780490630,"status":{"type":"idle"},"path":null,"cwd":"/tmp/hist-injected","cliVersion":"0.0.0","source":"appServer","threadSource":"user","name":"injected","turns":[{"id":"turn_injected","startedAt":1780490600,"completedAt":1780490630,"items":[{"type":"userMessage","id":"user_initial","clientId":"client_initial","content":[{"type":"text","text":"先排查"}]},{"type":"agentMessage","id":"commentary_injected","text":"我先看当前状态。","phase":"commentary"},{"type":"userMessage","id":"user_mid","clientId":"client_mid","content":[{"type":"text","text":"要求后续变更"}]},{"type":"agentMessage","id":"assistant_injected","text":"已按后续要求完成。","phase":"final_answer"}]}]}}}"#)
+
+        let page = try await pageTask.value
+        XCTAssertEqual(page.messages.map(\.content), ["先排查", "我先看当前状态。", "要求后续变更", "已按后续要求完成。"])
+        let firstUser = try XCTUnwrap(page.messages.first { $0.content == "先排查" })
+        let middleUser = try XCTUnwrap(page.messages.first { $0.content == "要求后续变更" })
+
+        XCTAssertNil(firstUser.userDelivery)
+        XCTAssertEqual(middleUser.userDelivery, .injected)
+        XCTAssertLessThan(try XCTUnwrap(firstUser.timelineOrdinal), try XCTUnwrap(middleUser.timelineOrdinal))
     }
 
     func testDirectRuntimeUsesPagedThreadTurnsListWhenGatewayAllowsIt() async throws {
@@ -10866,7 +11195,10 @@ extension ConversationDataFlowTests {
         let firstPage = try await firstPageTask.value
         XCTAssertEqual(firstPage.messages.map(\.content), ["m1", "m2", "m3", "m4"])
         XCTAssertEqual(try XCTUnwrap(firstPage.messages.first { $0.content == "m4" }?.createdAt).timeIntervalSince1970, 1_780_490_303, accuracy: 0.001)
-        XCTAssertFalse(firstPage.messages.contains { $0.isTimestampFallback })
+        XCTAssertTrue(try XCTUnwrap(firstPage.messages.first { $0.content == "m1" }).isTimestampFallback)
+        XCTAssertFalse(try XCTUnwrap(firstPage.messages.first { $0.content == "m2" }).isTimestampFallback)
+        XCTAssertFalse(try XCTUnwrap(firstPage.messages.first { $0.content == "m3" }).isTimestampFallback)
+        XCTAssertFalse(try XCTUnwrap(firstPage.messages.first { $0.content == "m4" }).isTimestampFallback)
         XCTAssertTrue(firstPage.hasMoreBefore)
         let cursor = try XCTUnwrap(firstPage.previousCursor)
 
@@ -10979,17 +11311,21 @@ extension ConversationDataFlowTests {
         conversationStore.setHistory(page.messages, sessionID: "thr_processed")
         let items = ConversationTimelineItemBuilder.items(from: conversationStore.messages(for: "thr_processed"))
 
-        XCTAssertEqual(items.count, 3)
+        XCTAssertEqual(items.count, 4)
         guard case .processed(let group) = items[1] else {
             return XCTFail("thread/read 过程 item 应折叠到最终 assistant 前")
         }
-        XCTAssertEqual(group.messages.count, 4)
-        XCTAssertEqual(group.title, "已处理 4 步 · 34s")
+        XCTAssertEqual(group.messages.map(\.kind), [.reasoningSummary, .reasoningSummary, .commandSummary])
         guard case .message(let final) = items[2] else {
             return XCTFail("最终 assistant 应保持独立展开")
         }
         XCTAssertEqual(final.role, .assistant)
         XCTAssertEqual(final.content, "程序员相亲，对方问：你会浪漫吗？")
+        guard case .message(let plan) = items[3] else {
+            return XCTFail("plan 应固定在最终 assistant 后")
+        }
+        XCTAssertEqual(plan.kind, .plan)
+        XCTAssertEqual(plan.content, "让子 agent 生成一个短笑话。")
     }
 
     func testDirectRuntimeDropsStaleReplayedApprovalForIdleThread() async throws {

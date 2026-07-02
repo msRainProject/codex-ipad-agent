@@ -264,6 +264,10 @@ struct ProcessedConversationGroup: Identifiable, Equatable {
 struct ConversationTimelineItemBuilder {
     static func items(from messages: [ConversationMessage]) -> [ConversationTimelineItem] {
         let completedAssistantByTurnID = completedAssistantMessagesByTurnID(in: messages)
+        let planMessagesByTurnID = planMessagesByTurnID(
+            in: messages,
+            completedTurnIDs: Set(completedAssistantByTurnID.keys)
+        )
         let processMessagesByTurnID = groupedProcessMessagesByTurnID(
             in: messages,
             completedTurnIDs: Set(completedAssistantByTurnID.keys)
@@ -271,13 +275,21 @@ struct ConversationTimelineItemBuilder {
         let groupedProcessMessageIDs = Set(processMessagesByTurnID.values.flatMap { grouped in
             grouped.map(\.id)
         })
+        let pinnedPlanMessageIDs = Set(planMessagesByTurnID.values.flatMap { grouped in
+            grouped.map(\.id)
+        })
         var insertedProcessTurnIDs = Set<TurnID>()
+        var insertedPlanTurnIDs = Set<TurnID>()
         var items: [ConversationTimelineItem] = []
         var index = messages.startIndex
 
         while index < messages.endIndex {
             let message = messages[index]
             if groupedProcessMessageIDs.contains(message.id) {
+                index = messages.index(after: index)
+                continue
+            }
+            if pinnedPlanMessageIDs.contains(message.id) {
                 index = messages.index(after: index)
                 continue
             }
@@ -292,6 +304,13 @@ struct ConversationTimelineItemBuilder {
             }
             guard isCollapsibleProcessMessage(message) else {
                 items.append(.message(message))
+                if let turnID = message.turnID,
+                   isCompletedAssistantMessage(message),
+                   let plans = planMessagesByTurnID[turnID],
+                   !insertedPlanTurnIDs.contains(turnID) {
+                    items.append(contentsOf: plans.map(ConversationTimelineItem.message))
+                    insertedPlanTurnIDs.insert(turnID)
+                }
                 index = messages.index(after: index)
                 continue
             }
@@ -319,9 +338,9 @@ struct ConversationTimelineItemBuilder {
             return false
         }
         switch message.kind {
-        case .plan, .reasoningSummary, .commandSummary, .fileChangeSummary, .approval, .userInput:
+        case .reasoningSummary, .commandSummary, .fileChangeSummary, .approval, .userInput:
             return true
-        case .error, .message:
+        case .plan, .error, .message:
             return false
         }
     }
@@ -353,6 +372,24 @@ struct ConversationTimelineItemBuilder {
             guard let turnID = message.turnID,
                   completedTurnIDs.contains(turnID),
                   isCollapsibleProcessMessage(message)
+            else {
+                continue
+            }
+            result[turnID, default: []].append(message)
+        }
+        return result
+    }
+
+    private static func planMessagesByTurnID(
+        in messages: [ConversationMessage],
+        completedTurnIDs: Set<TurnID>
+    ) -> [TurnID: [ConversationMessage]] {
+        var result: [TurnID: [ConversationMessage]] = [:]
+        for message in messages {
+            guard let turnID = message.turnID,
+                  completedTurnIDs.contains(turnID),
+                  message.role == .system,
+                  message.kind == .plan
             else {
                 continue
             }
@@ -955,6 +992,7 @@ private struct MessageRow: View, Equatable {
             && lhs.message.kind == rhs.message.kind
             && lhs.message.sendStatus == rhs.message.sendStatus
             && lhs.message.revision == rhs.message.revision
+            && lhs.message.userDelivery == rhs.message.userDelivery
             && lhs.message.createdAt == rhs.message.createdAt
             && lhs.message.updatedAt == rhs.message.updatedAt
             && lhs.message.renderFingerprint == rhs.message.renderFingerprint
@@ -1025,15 +1063,30 @@ private struct MessageRow: View, Equatable {
                 .font(themeStore.uiFont(.caption2))
                 .foregroundStyle(.red)
         case .sending:
-            deliveryCaption("发送中…")
+            deliveryCaption(sendingDeliveryCaption)
         case .sent:
-            if showsActiveDeliveryStatus {
+            if message.userDelivery == .injected {
+                deliveryCaption("已引导对话")
+            } else if showsActiveDeliveryStatus {
                 deliveryCaption("已送达，等待回复")
+            }
+        case .confirmed:
+            if message.userDelivery == .injected {
+                deliveryCaption("已引导对话")
             }
         case .local:
             deliveryCaption("待发送")
-        default:
-            EmptyView()
+        }
+    }
+
+    private var sendingDeliveryCaption: String {
+        switch message.userDelivery {
+        case .queued:
+            return "排队发送中…"
+        case .guided, .injected:
+            return "引导发送中…"
+        case nil:
+            return "发送中…"
         }
     }
 
