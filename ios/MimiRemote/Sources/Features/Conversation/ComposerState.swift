@@ -7,6 +7,78 @@ struct SubmittedComposerDraft {
     let voiceDraftNeedsReview: Bool
 }
 
+enum ComposerDraftScopeKey: Hashable {
+    case session(SessionID)
+    case newSession(projectID: String)
+    case none
+
+    static func current(selectedSessionID: SessionID?, selectedProjectID: String?) -> ComposerDraftScopeKey {
+        if let selectedSessionID, !selectedSessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return .session(selectedSessionID)
+        }
+        if let selectedProjectID, !selectedProjectID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return .newSession(projectID: selectedProjectID)
+        }
+        return .none
+    }
+}
+
+struct ComposerDraftSnapshot: Equatable {
+    var text: String
+    var attachments: [CodexAppServerUserInput]
+    var voiceDraftNeedsReview: Bool
+
+    static let empty = ComposerDraftSnapshot(text: "", attachments: [], voiceDraftNeedsReview: false)
+
+    init(text: String, attachments: [CodexAppServerUserInput], voiceDraftNeedsReview: Bool) {
+        self.text = text
+        self.attachments = attachments
+        self.voiceDraftNeedsReview = voiceDraftNeedsReview && Self.containsNonWhitespace(text)
+    }
+
+    init(submitted: SubmittedComposerDraft) {
+        self.init(
+            text: submitted.text,
+            attachments: submitted.attachments,
+            voiceDraftNeedsReview: submitted.voiceDraftNeedsReview
+        )
+    }
+
+    var isEmpty: Bool {
+        !Self.containsNonWhitespace(text) && attachments.isEmpty
+    }
+
+    private static func containsNonWhitespace(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            !CharacterSet.whitespacesAndNewlines.contains(scalar)
+        }
+    }
+}
+
+struct ComposerDraftCache {
+    private var snapshotsByScope: [ComposerDraftScopeKey: ComposerDraftSnapshot] = [:]
+
+    mutating func save(_ snapshot: ComposerDraftSnapshot, for scope: ComposerDraftScopeKey) {
+        guard scope != .none else {
+            return
+        }
+        // 空草稿直接移除，避免用户发出或删空后再次切回时恢复旧内容。
+        if snapshot.isEmpty {
+            snapshotsByScope.removeValue(forKey: scope)
+        } else {
+            snapshotsByScope[scope] = snapshot
+        }
+    }
+
+    mutating func remove(scope: ComposerDraftScopeKey) {
+        snapshotsByScope.removeValue(forKey: scope)
+    }
+
+    func snapshot(for scope: ComposerDraftScopeKey) -> ComposerDraftSnapshot {
+        snapshotsByScope[scope] ?? .empty
+    }
+}
+
 enum ComposerPermissionMode: String, CaseIterable, Identifiable {
     case requestApproval
     case readOnly
@@ -243,6 +315,22 @@ struct ComposerState {
         draft = submitted.text
         attachments = submitted.attachments
         voiceDraftNeedsReview = submitted.voiceDraftNeedsReview
+    }
+
+    func draftSnapshot() -> ComposerDraftSnapshot {
+        ComposerDraftSnapshot(
+            text: draft,
+            attachments: attachments,
+            voiceDraftNeedsReview: voiceDraftNeedsReview
+        )
+    }
+
+    mutating func restoreDraftSnapshot(_ snapshot: ComposerDraftSnapshot) {
+        draft = snapshot.text
+        attachments = snapshot.attachments
+        voiceDraftNeedsReview = snapshot.voiceDraftNeedsReview && hasNonWhitespaceDraft
+        voiceDraftBase = nil
+        voiceLastRenderedDraft = nil
     }
 
     mutating func addAttachment(_ input: CodexAppServerUserInput) {

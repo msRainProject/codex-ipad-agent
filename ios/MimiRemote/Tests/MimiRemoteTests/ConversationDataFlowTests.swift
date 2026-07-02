@@ -814,6 +814,36 @@ final class ConversationDataFlowTests: XCTestCase {
         XCTAssertEqual(composerState.sendMode, .standard)
     }
 
+    func testComposerDraftCacheKeepsDraftsScopedToSessionOrNewProject() {
+        let sessionScope = ComposerDraftScopeKey.current(selectedSessionID: "thread-a", selectedProjectID: "project-1")
+        let newProjectScope = ComposerDraftScopeKey.current(selectedSessionID: nil, selectedProjectID: "project-1")
+        var cache = ComposerDraftCache()
+        let sessionDraft = ComposerDraftSnapshot(
+            text: "只属于 thread-a 的草稿",
+            attachments: [.mention(name: "README", path: "/repo/README.md")],
+            voiceDraftNeedsReview: false
+        )
+        let projectDraft = ComposerDraftSnapshot(
+            text: "项目新会话草稿",
+            attachments: [],
+            voiceDraftNeedsReview: true
+        )
+
+        cache.save(sessionDraft, for: sessionScope)
+        cache.save(projectDraft, for: newProjectScope)
+
+        XCTAssertEqual(cache.snapshot(for: sessionScope), sessionDraft)
+        XCTAssertEqual(cache.snapshot(for: newProjectScope), projectDraft)
+        XCTAssertEqual(
+            cache.snapshot(for: .session("thread-b")),
+            .empty,
+            "切到其他会话时不能复用上一个输入框里的草稿"
+        )
+
+        cache.save(.empty, for: sessionScope)
+        XCTAssertEqual(cache.snapshot(for: sessionScope), .empty)
+    }
+
     func testComposerPlanAndGoalModesDoNotUseGuidedDelivery() {
         var composerState = ComposerState()
 
@@ -5097,6 +5127,7 @@ final class ConversationDataFlowTests: XCTestCase {
         await store.refreshAll(autoAttach: false)
         await store.selectSession(running)
         await store.refreshCurrentContext()
+        try await Task.sleep(nanoseconds: 50_000_000)
 
         // session 高频状态更新走 ID->index 投影替换，不能退化成重复追加。
         XCTAssertEqual(store.sessions.filter { $0.id == running.id }.count, 1)
@@ -5557,6 +5588,7 @@ final class ConversationDataFlowTests: XCTestCase {
         await store.refreshAll(autoAttach: false)
         store.selectedSessionID = running.id
         await store.refreshCurrentContext()
+        try await Task.sleep(nanoseconds: 50_000_000)
 
         XCTAssertEqual(client.requestedSessionIDs, [running.id])
         XCTAssertEqual(client.requestedSessionAfterSeqs, [12])
@@ -10417,6 +10449,41 @@ extension ConversationDataFlowTests {
         let sent = await transport.sentMessages()
         let threadReadCount = sent.compactMap { try? decodeAppServerRequest($0) }.filter { $0.method == "thread/read" }.count
         XCTAssertEqual(threadReadCount, 1, "翻看更早历史应命中缓存，不应再次拉取整段 thread/read")
+    }
+
+    func testDirectRuntimeParsesHistoryTurnDatesFromISOAndMilliseconds() async throws {
+        let project = AgentProject(id: "proj_hist_dates", name: "Hist Dates", path: "/tmp/hist-dates")
+        let transport = FakeCodexAppServerTransport()
+        let runtime = CodexAppServerSessionRuntime(
+            endpoint: "http://127.0.0.1:8787",
+            token: "outer-token",
+            transportFactory: { transport },
+            configProvider: { makeDirectAppServerConfig(project: project) }
+        )
+        let client = CodexAppServerSessionAPIClient(runtime: runtime)
+
+        let pageTask = Task {
+            try await client.messagesPage(sessionID: "thr_hist_dates", before: nil, limit: 10)
+        }
+
+        let initialize = try await waitForFakeAppServerRequest(transport, method: "initialize")
+        transport.enqueue(#"{"id":\#(try jsonFragment(for: initialize.id)),"result":{"userAgent":"fake-codex","platformFamily":"macos"}}"#)
+
+        let read = try await waitForFakeAppServerRequest(transport, method: "thread/read")
+        transport.enqueue(#"{"id":\#(try jsonFragment(for: read.id)),"result":{"thread":{"id":"thr_hist_dates","sessionId":"thr_hist_dates","preview":"hist dates","ephemeral":false,"modelProvider":"openai","createdAt":1780490000,"updatedAt":1780490001,"status":{"type":"idle"},"path":null,"cwd":"/tmp/hist-dates","cliVersion":"0.0.0","source":"appServer","threadSource":"user","name":"hist dates","turns":[{"id":"turn_iso","startedAt":"2026-07-01T18:16:00.000Z","completedAt":"2026-07-01T18:16:01.154Z","items":[{"type":"userMessage","id":"user_iso","content":[{"type":"text","text":"iso user"}]},{"type":"agentMessage","id":"assistant_iso","text":"iso assistant","phase":"final_answer"}]},{"id":"turn_ms","startedAt":1782929761154,"completedAt":"1782929762123","items":[{"type":"userMessage","id":"user_ms","content":[{"type":"text","text":"ms user"}]},{"type":"agentMessage","id":"assistant_ms","text":"ms assistant","phase":"final_answer"}]}]}}}"#)
+
+        let page = try await pageTask.value
+        let isoUser = try XCTUnwrap(page.messages.first { $0.content == "iso user" })
+        let isoAssistant = try XCTUnwrap(page.messages.first { $0.content == "iso assistant" })
+        let msUser = try XCTUnwrap(page.messages.first { $0.content == "ms user" })
+        let msAssistant = try XCTUnwrap(page.messages.first { $0.content == "ms assistant" })
+
+        XCTAssertEqual(try XCTUnwrap(isoUser.createdAt).timeIntervalSince1970, 1_782_929_760, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(isoAssistant.createdAt).timeIntervalSince1970, 1_782_929_761.154, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(isoAssistant.updatedAt).timeIntervalSince1970, 1_782_929_761.154, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(msUser.createdAt).timeIntervalSince1970, 1_782_929_761.154, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(msAssistant.createdAt).timeIntervalSince1970, 1_782_929_762.123, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(msAssistant.updatedAt).timeIntervalSince1970, 1_782_929_762.123, accuracy: 0.001)
     }
 
     func testDirectRuntimeUsesPagedThreadTurnsListWhenGatewayAllowsIt() async throws {

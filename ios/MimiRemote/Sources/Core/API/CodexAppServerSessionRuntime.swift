@@ -2495,18 +2495,45 @@ actor CodexAppServerSessionRuntime {
         }
         switch value {
         case .int(let int):
-            return Date(timeIntervalSince1970: TimeInterval(int))
+            return Self.date(fromNumericTimestamp: Double(int))
         case .double(let double):
-            return Date(timeIntervalSince1970: double)
+            return Self.date(fromNumericTimestamp: double)
         case .string(let raw):
-            guard let double = Double(raw) else {
-                return nil
-            }
-            return Date(timeIntervalSince1970: double)
+            return Self.date(from: raw)
         default:
             return nil
         }
     }
+
+    private static func date(from text: String) -> Date? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let number = Double(trimmed) {
+            return date(fromNumericTimestamp: number)
+        }
+        // app-server 历史在不同版本里可能返回 ISO8601 字符串；解析失败不能兜底成当前时间。
+        return iso8601Fractional.date(from: trimmed) ?? iso8601.date(from: trimmed)
+    }
+
+    private static func date(fromNumericTimestamp value: Double) -> Date? {
+        guard value.isFinite, value > 0 else {
+            return nil
+        }
+        // app-server / JSON 桥接历史上出现过秒和毫秒两种数字形态，按数量级兼容。
+        let seconds = value > 10_000_000_000 ? value / 1_000 : value
+        return Date(timeIntervalSince1970: seconds)
+    }
+
+    private static let iso8601Fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let iso8601: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
 
     private func nonEmpty(_ values: String?...) -> String? {
         for value in values {

@@ -480,15 +480,27 @@ private struct AgentWorkbenchTitle: View {
                 .foregroundStyle(tokens.primaryText)
                 .lineLimit(1)
                 .minimumScaleFactor(0.82)
-            Text(secondaryText)
-                .font(themeStore.codeFont(.caption2))
-                .foregroundStyle(tokens.tertiaryText)
-                .lineLimit(1)
-                .minimumScaleFactor(0.76)
+            HStack(spacing: 5) {
+                if historyProgress != nil {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(tokens.tertiaryText)
+                        .frame(width: 10, height: 10)
+                }
+                Text(secondaryText)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.76)
+            }
+            .font(themeStore.codeFont(.caption2))
+            .foregroundStyle(tokens.tertiaryText)
         }
         .frame(maxWidth: maxWidth)
         .offset(x: horizontalOffset)
         .accessibilityElement(children: .combine)
+    }
+
+    private var historyProgress: HistoryLoadProgress? {
+        sessionStore.historyLoadProgress(sessionID: sessionStore.selectedSessionID)
     }
 
     private var primaryText: String {
@@ -499,6 +511,10 @@ private struct AgentWorkbenchTitle: View {
     }
 
     private var secondaryText: String {
+        if let historyProgress {
+            // 历史请求没有真实网络进度，标题区只保留轻量状态，避免 32% 这类假进度占据主内容。
+            return "正在\(historyProgress.title)…"
+        }
         if let session = sessionStore.selectedSession {
             return session.title.isEmpty ? session.dir : session.title
         }

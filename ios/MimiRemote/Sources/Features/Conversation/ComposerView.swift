@@ -95,6 +95,9 @@ struct ComposerView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var composerState = ComposerState()
+    @State private var activeComposerDraftScope = ComposerDraftScopeKey.none
+    @State private var composerDraftCache = ComposerDraftCache()
+    @State private var composerTextExternalRevision = 0
     @StateObject private var voiceInput = VoiceInputController()
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var manualInputKind: ManualInputKind = .localImage
@@ -201,11 +204,8 @@ struct ComposerView: View {
         .onChange(of: selectedVoiceLanguageID) { _, _ in
             clearVoiceTransientStatus()
         }
-        .onChange(of: sessionStore.selectedSessionID) { _, _ in
-            cancelVoiceInteraction(clearStatus: true)
-            composerState.resetTransientSendMode()
-            applyDefaultPermissionMode()
-            guidedFollowUpEnabled = false
+        .onChange(of: currentComposerDraftScope) { _, newScope in
+            switchComposerDraftScope(to: newScope)
         }
         .onChange(of: canUseGuidedFollowUp) { _, canUse in
             if !canUse {
@@ -218,7 +218,11 @@ struct ComposerView: View {
         .task(id: voiceInput.errorMessage) {
             await autoDismissVoiceErrorIfNeeded(voiceInput.errorMessage)
         }
+        .onAppear {
+            switchComposerDraftScope(to: currentComposerDraftScope)
+        }
         .task {
+            switchComposerDraftScope(to: currentComposerDraftScope)
             applyDefaultPermissionMode()
             voiceInput.prewarm()
             await sessionStore.refreshAppServerModelOptions()
@@ -237,10 +241,12 @@ struct ComposerView: View {
         if composerState.isGoalModeSelected {
             return submitGoalDraft()
         }
+        let submittedDraftScope = activeComposerDraftScope
         let options = preparedTurnOptionsForSubmit()
         guard let submitted = composerState.takeDraftForSubmit(isLoading: sessionStore.isLoading, turnOptionsOverride: options) else {
             return false
         }
+        composerDraftCache.remove(scope: submittedDraftScope)
         let runningDelivery = runningTurnDeliveryForSubmit
         cancelVoiceInteraction(clearStatus: false)
         clearVoiceTransientStatus()
@@ -248,10 +254,11 @@ struct ComposerView: View {
             let accepted = await sessionStore.sendTurn(submitted.payload, runningDelivery: runningDelivery)
             if !accepted {
                 await MainActor.run {
-                    composerState.restore(submitted)
+                    restoreSubmittedDraft(submitted, originalScope: submittedDraftScope)
                 }
             } else {
                 await MainActor.run {
+                    composerDraftCache.remove(scope: submittedDraftScope)
                     guidedFollowUpEnabled = false
                     composerState.resetSendModeAfterSubmit()
                 }
@@ -267,15 +274,18 @@ struct ComposerView: View {
         // 防止 app-server 沿用上一轮规划协作状态。
         options.collaborationMode = .default
         options.planGuidanceEnabled = false
+        let submittedDraftScope = activeComposerDraftScope
         guard let submitted = composerState.takeDraftForSubmit(
             isLoading: sessionStore.isLoading || sessionStore.isUpdatingThreadGoal,
             turnOptionsOverride: options
         ) else {
             return false
         }
+        composerDraftCache.remove(scope: submittedDraftScope)
         let objective = submitted.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !objective.isEmpty else {
             composerState.restore(submitted)
+            composerDraftCache.save(composerState.draftSnapshot(), for: submittedDraftScope)
             return false
         }
         let runningDelivery = runningTurnDeliveryForSubmit
@@ -289,10 +299,11 @@ struct ComposerView: View {
             )
             if !accepted {
                 await MainActor.run {
-                    composerState.restore(submitted)
+                    restoreSubmittedDraft(submitted, originalScope: submittedDraftScope)
                 }
             } else {
                 await MainActor.run {
+                    composerDraftCache.remove(scope: submittedDraftScope)
                     guidedFollowUpEnabled = false
                     composerState.resetSendModeAfterSubmit()
                 }
@@ -320,6 +331,69 @@ struct ComposerView: View {
             isComposerTextComposing = false
         }
         return true
+    }
+
+    private var currentComposerDraftScope: ComposerDraftScopeKey {
+        ComposerDraftScopeKey.current(
+            selectedSessionID: sessionStore.selectedSessionID,
+            selectedProjectID: sessionStore.selectedProjectID
+        )
+    }
+
+    private func switchComposerDraftScope(to nextScope: ComposerDraftScopeKey) {
+        guard activeComposerDraftScope != nextScope else {
+            return
+        }
+        synchronizeComposerTextBeforeDraftScopeChange()
+        composerDraftCache.save(composerState.draftSnapshot(), for: activeComposerDraftScope)
+        cancelVoiceInteraction(clearStatus: true)
+
+        // 草稿跟会话走；运行参数仍维持全局体验，只重置下一次发送这种临时开关。
+        composerState.resetTransientSendMode()
+        applyDefaultPermissionMode()
+        composerState.restoreDraftSnapshot(composerDraftCache.snapshot(for: nextScope))
+        composerTextExternalRevision += 1
+        activeComposerDraftScope = nextScope
+        guidedFollowUpEnabled = false
+        measuredComposerTextHeight = 0
+        isComposerTextComposing = false
+    }
+
+    private func synchronizeComposerTextBeforeDraftScopeChange() {
+        guard let snapshot = composerTextSubmitBridge.snapshotForSubmit() else {
+            return
+        }
+        guard !snapshot.isComposing else {
+            // marked text 还在输入法候选态，不能当成已确认草稿跨会话保存。
+            isComposerTextComposing = true
+            return
+        }
+        if composerState.draft != snapshot.text {
+            composerState.draft = snapshot.text
+        }
+        if isComposerTextComposing {
+            isComposerTextComposing = false
+        }
+    }
+
+    @MainActor
+    private func restoreSubmittedDraft(_ submitted: SubmittedComposerDraft, originalScope: ComposerDraftScopeKey) {
+        let restoreScope = submittedDraftRestoreScope(originalScope: originalScope)
+        if restoreScope == activeComposerDraftScope {
+            composerState.restore(submitted)
+        } else {
+            composerDraftCache.save(ComposerDraftSnapshot(submitted: submitted), for: restoreScope)
+        }
+    }
+
+    private func submittedDraftRestoreScope(originalScope: ComposerDraftScopeKey) -> ComposerDraftScopeKey {
+        // 新建会话提交时会先进入 local:<project>:<client_message_id> 乐观会话；
+        // 如果创建失败，草稿应回到这个用户正在看的失败会话，而不是藏回项目入口。
+        if case .session(let sessionID) = activeComposerDraftScope,
+           sessionID.hasPrefix("local:") || sessionStore.selectedSession?.source == "local" {
+            return activeComposerDraftScope
+        }
+        return originalScope
     }
 
     private func preparedTurnOptionsForSubmit() -> CodexAppServerTurnOptions {
@@ -607,6 +681,7 @@ struct ComposerView: View {
                 font: composerUIFont,
                 textColor: UIColor(tokens.primaryText),
                 tintColor: UIColor(tokens.accent),
+                externalTextRevision: composerTextExternalRevision,
                 minHeight: composerMinHeight,
                 maxHeight: composerMaxHeight,
                 onSubmit: { submitDraft() },
@@ -3619,6 +3694,7 @@ private struct ComposerTextView: UIViewRepresentable {
     let font: UIFont
     let textColor: UIColor
     let tintColor: UIColor
+    let externalTextRevision: Int
     let minHeight: CGFloat
     let maxHeight: CGFloat
     let onSubmit: () -> Bool
@@ -3631,6 +3707,7 @@ private struct ComposerTextView: UIViewRepresentable {
         textView.delegate = context.coordinator
         textView.text = text
         context.coordinator.lastSyncedText = text
+        context.coordinator.lastAppliedExternalRevision = externalTextRevision
         submitBridge.attach(textView)
         textView.onCommandSubmit = onSubmit
         textView.onContentLayoutChanged = { textView in
@@ -3666,6 +3743,7 @@ private struct ComposerTextView: UIViewRepresentable {
         }
         uiView.onVoiceShortcutPressChanged = onVoiceShortcutPressChanged
         context.coordinator.updateCompositionState(uiView.hasMarkedText)
+        let shouldForceExternalTextSync = context.coordinator.lastAppliedExternalRevision != externalTextRevision
 
         // 字体/颜色只在真正变化时赋值：UITextView 的 font setter 会让 TextKit 对整段文本重新排版，
         // 打字时（尤其是中文 marked text 合成期间）每次按键都重设会打断输入法合成并造成可感知卡顿。
@@ -3681,7 +3759,7 @@ private struct ComposerTextView: UIViewRepresentable {
             uiView.tintColor = tintColor
         }
 
-        if uiView.hasMarkedText, context.coordinator.lastSyncedText == text {
+        if uiView.hasMarkedText, context.coordinator.lastSyncedText == text, !shouldForceExternalTextSync {
             // 中文/日文等输入法会先把拼音或假名放在 marked text 中。此时外层草稿仍是
             // 上一次已确认文本，不能把 SwiftUI 状态回灌到 UITextView，否则首个字母会被提交成正文。
             if needsContentHeightReport {
@@ -3690,7 +3768,7 @@ private struct ComposerTextView: UIViewRepresentable {
             return
         }
 
-        guard context.coordinator.lastSyncedText != text else {
+        guard context.coordinator.lastSyncedText != text || shouldForceExternalTextSync else {
             if needsContentHeightReport {
                 context.coordinator.reportContentHeight(for: uiView)
             }
@@ -3704,6 +3782,7 @@ private struct ComposerTextView: UIViewRepresentable {
         context.coordinator.isApplyingExternalText = true
         uiView.text = text
         context.coordinator.lastSyncedText = text
+        context.coordinator.lastAppliedExternalRevision = externalTextRevision
         context.coordinator.isApplyingExternalText = false
         context.coordinator.updateCompositionState(false)
         uiView.selectedRange = TextSelectionPolicy.rangeAfterExternalTextSync(
@@ -3722,6 +3801,7 @@ private struct ComposerTextView: UIViewRepresentable {
         var parent: ComposerTextView
         var isApplyingExternalText = false
         var lastSyncedText = ""
+        var lastAppliedExternalRevision = 0
         private var lastReportedContentHeight: CGFloat = 0
         private var pendingContentHeight: CGFloat?
         private var isContentHeightReportScheduled = false

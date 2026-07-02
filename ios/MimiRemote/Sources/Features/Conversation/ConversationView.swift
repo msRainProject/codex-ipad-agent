@@ -457,6 +457,7 @@ struct ConversationTimelineView: View {
     let layout: ConversationLayout
     @State private var shouldFollowMessageTail = true
     @State private var forceNextMessageTailScroll = true
+    @State private var isTailFollowLockedByLocalSubmit = false
     @State private var hasUnseenTailMessage = false
     @State private var isPreservingHistoryScroll = false
     @State private var expandedProcessedGroupIDs: Set<String> = []
@@ -470,7 +471,7 @@ struct ConversationTimelineView: View {
         let timelineItems = timelineItemCache.items(from: messages)
         let timelineItemIDs = timelineItems.map(\.id)
         let activeUserDeliveryMessageID = Self.activeUserDeliveryMessageID(in: messages)
-        let historyProgress = sessionStore.historyLoadProgress(sessionID: sessionStore.selectedSessionID)
+        let isHistoryLoading = sessionStore.historyLoadProgress(sessionID: sessionStore.selectedSessionID) != nil
         return ScrollViewReader { proxy in
             ZStack(alignment: .bottomTrailing) {
                 // 用 List（底层 UITableView）替代 ScrollView + LazyVStack：行高是真实测量值、
@@ -478,25 +479,15 @@ struct ConversationTimelineView: View {
                 // “空白要手滑一下”的竞态，右侧滚动条也不再因 LazyVStack 高度估算而长度/位置乱跳。
                 List {
                     if timelineItems.isEmpty {
-                        Group {
-                            if let historyProgress {
-                                historyLoadingState(historyProgress)
-                            } else {
-                                emptyState
-                            }
-                        }
-                            .padding(.top, 80)
-                            .frame(maxWidth: .infinity)
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(layout.messageRowInsets)
-                            .listRowBackground(Color.clear)
-                    } else {
-                        if let historyProgress {
-                            historyProgressRow(historyProgress)
+                        if !isHistoryLoading {
+                            emptyState
+                                .padding(.top, 80)
+                                .frame(maxWidth: .infinity)
                                 .listRowSeparator(.hidden)
                                 .listRowInsets(layout.messageRowInsets)
                                 .listRowBackground(Color.clear)
                         }
+                    } else {
                         if sessionStore.canLoadEarlierHistory(sessionID: sessionStore.selectedSessionID) {
                             loadEarlierRow(proxy: proxy, timelineItems: timelineItems)
                                 .listRowSeparator(.hidden)
@@ -515,6 +506,12 @@ struct ConversationTimelineView: View {
                                 .listRowInsets(layout.messageRowInsets)
                                 .listRowBackground(Color.clear)
                         }
+                        Color.clear
+                            .frame(height: 1)
+                            .id(Self.timelineTailSentinelID)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets())
+                            .listRowBackground(Color.clear)
                     }
                 }
                 .listStyle(.plain)
@@ -524,14 +521,17 @@ struct ConversationTimelineView: View {
                 .simultaneousGesture(TapGesture().onEnded {
                     KeyboardDismissal.dismiss()
                 })
+                .simultaneousGesture(userScrollAwayFromTailGesture)
                 // 是否贴近底部用滚动几何实时判断，只在贴底时跟随流式输出，
                 // 用户上翻历史时不会被尾部更新甩回底部。
                 .onScrollGeometryChange(for: Bool.self) { geometry in
                     isNearBottom(geometry)
                 } action: { _, nearBottom in
-                    shouldFollowMessageTail = nearBottom
                     if nearBottom {
+                        shouldFollowMessageTail = true
                         hasUnseenTailMessage = false
+                    } else if !isTailFollowLockedByLocalSubmit {
+                        shouldFollowMessageTail = false
                     }
                 }
 
@@ -539,6 +539,7 @@ struct ConversationTimelineView: View {
                     Button {
                         hasUnseenTailMessage = false
                         shouldFollowMessageTail = true
+                        isTailFollowLockedByLocalSubmit = true
                         scrollToTimelineTail(timelineItems: timelineItems, proxy: proxy, animated: true)
                     } label: {
                         Label("新消息", systemImage: "arrow.down.circle.fill")
@@ -552,9 +553,13 @@ struct ConversationTimelineView: View {
                     .accessibilityLabel("回到底部查看新消息")
                 }
             }
-            .onChange(of: sessionStore.selectedSessionID) { _, _ in
+            .onChange(of: sessionStore.selectedSessionID) { oldID, newID in
+                let shouldPreserveTailFollowLock = isTailFollowLockedByLocalSubmit
+                    && Self.isOptimisticSessionID(oldID)
+                    && newID != nil
                 shouldFollowMessageTail = true
                 forceNextMessageTailScroll = true
+                isTailFollowLockedByLocalSubmit = shouldPreserveTailFollowLock
                 hasUnseenTailMessage = false
                 isPreservingHistoryScroll = false
                 expandedProcessedGroupIDs.removeAll()
@@ -567,6 +572,7 @@ struct ConversationTimelineView: View {
                 if Self.shouldForceTailFollow(forNewTailMessage: messages.last) {
                     // 本地发送代表用户明确进入最新上下文；即使滚动几何刚好误判为“不在底部”，
                     // 也要立即贴到尾部，避免发完消息后还停在历史位置。
+                    isTailFollowLockedByLocalSubmit = true
                     forceScrollToTimelineTail(timelineItems: timelineItems, proxy: proxy, animated: true)
                     Task { @MainActor in
                         await Task.yield()
@@ -644,6 +650,24 @@ struct ConversationTimelineView: View {
         return nil
     }
 
+    private static let timelineTailSentinelID = "__conversation_timeline_tail__"
+
+    private static func isOptimisticSessionID(_ sessionID: SessionID?) -> Bool {
+        sessionID?.hasPrefix("local:") == true
+    }
+
+    private var userScrollAwayFromTailGesture: some Gesture {
+        DragGesture(minimumDistance: 10)
+            .onChanged { value in
+                guard value.translation.height > 12 else {
+                    return
+                }
+                // 用户向下拖动列表是在主动回看更早内容；解除本轮发送后的尾部跟随锁。
+                isTailFollowLockedByLocalSubmit = false
+                shouldFollowMessageTail = false
+            }
+    }
+
     static func shouldForceTailFollow(forNewTailMessage message: ConversationMessage?) -> Bool {
         guard let message else {
             return false
@@ -684,60 +708,6 @@ struct ConversationTimelineView: View {
         .frame(maxWidth: .infinity)
     }
 
-    private func historyProgressRow(_ progress: HistoryLoadProgress) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(workbenchSecondaryText)
-                Text(progress.title)
-                    .font(themeStore.uiFont(.caption, weight: .medium))
-                    .foregroundStyle(workbenchPrimaryText)
-                    .lineLimit(1)
-                Spacer(minLength: 8)
-                Text(progress.percentText)
-                    .font(themeStore.uiFont(.caption2, weight: .semibold))
-                    .foregroundStyle(workbenchSecondaryText)
-                    .monospacedDigit()
-            }
-            ProgressView(value: progress.fraction)
-                .progressViewStyle(.linear)
-                .tint(themeStore.tokens(for: colorScheme).accent)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(statusChipBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .frame(maxWidth: min(layout.systemMaxWidth, 420))
-        .frame(maxWidth: .infinity)
-    }
-
-    private func historyLoadingState(_ progress: HistoryLoadProgress) -> some View {
-        VStack(spacing: 14) {
-            Image(systemName: "clock.arrow.circlepath")
-                .font(themeStore.uiFont(.title2))
-                .foregroundStyle(workbenchSecondaryText)
-            Text(progress.title)
-                .font(themeStore.uiFont(.headline, weight: .semibold))
-                .foregroundStyle(workbenchPrimaryText)
-            VStack(alignment: .leading, spacing: 7) {
-                HStack {
-                    Text("历史加载")
-                    Spacer()
-                    Text(progress.percentText)
-                        .monospacedDigit()
-                }
-                .font(themeStore.uiFont(.caption, weight: .medium))
-                .foregroundStyle(workbenchSecondaryText)
-                ProgressView(value: progress.fraction)
-                    .progressViewStyle(.linear)
-                    .tint(themeStore.tokens(for: colorScheme).accent)
-            }
-            .frame(maxWidth: layout.emptyStateMaxWidth)
-        }
-        .padding(.vertical, 40)
-        .frame(maxWidth: .infinity)
-    }
-
     private func isNearBottom(_ geometry: ScrollGeometry) -> Bool {
         // 距底部多远用滚动几何直接算，不依赖某个具体行是否还被实例化。
         let distanceFromBottom = geometry.contentSize.height - geometry.visibleRect.maxY
@@ -775,7 +745,7 @@ struct ConversationTimelineView: View {
     }
 
     private func forceScrollToTimelineTail(timelineItems: [ConversationTimelineItem], proxy: ScrollViewProxy, animated: Bool) {
-        guard let lastID = timelineItems.last?.id else {
+        guard !timelineItems.isEmpty else {
             return
         }
         guard !isPreservingHistoryScroll else {
@@ -784,11 +754,11 @@ struct ConversationTimelineView: View {
         shouldFollowMessageTail = true
         hasUnseenTailMessage = false
         forceNextMessageTailScroll = false
-        scrollToTimelineTail(id: lastID, proxy: proxy, animated: animated)
+        scrollToTimelineTail(id: Self.timelineTailSentinelID, proxy: proxy, animated: animated)
     }
 
     private func scrollToTimelineTail(timelineItems: [ConversationTimelineItem], proxy: ScrollViewProxy, animated: Bool) {
-        guard let lastID = timelineItems.last?.id else {
+        guard !timelineItems.isEmpty else {
             return
         }
         guard !isPreservingHistoryScroll else {
@@ -800,7 +770,7 @@ struct ConversationTimelineView: View {
         }
         hasUnseenTailMessage = false
         forceNextMessageTailScroll = false
-        scrollToTimelineTail(id: lastID, proxy: proxy, animated: animated)
+        scrollToTimelineTail(id: Self.timelineTailSentinelID, proxy: proxy, animated: animated)
     }
 
     private func scrollToTimelineTail(id lastID: String, proxy: ScrollViewProxy, animated: Bool) {

@@ -786,7 +786,6 @@ private struct SessionRow: View, Equatable {
                     .font(themeStore.uiFont(size: 15, weight: isSelected ? .semibold : .regular))
                     .foregroundStyle(isSelected ? tokens.primaryText : tokens.secondaryText)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.86)
                     .layoutPriority(1)
                 Spacer(minLength: 8)
                 trailingMetadata
