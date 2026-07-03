@@ -1560,7 +1560,7 @@ func TestAppServerGatewaySanitizesParamsForAllAllowedMethods(t *testing.T) {
 	}
 
 	threadList := []byte(fmt.Sprintf(
-		`{"id":63,"method":"thread/list","params":{"cwd":%q,"limit":20,"cursor":"next",%s}}`,
+		`{"id":63,"method":"thread/list","params":{"cwd":%q,"limit":20,"cursor":"next","sortKey":"updated_at","sortDirection":"desc","archived":false,%s}}`,
 		projectDir,
 		dangerousTail,
 	))
@@ -1568,11 +1568,28 @@ func TestAppServerGatewaySanitizesParamsForAllAllowedMethods(t *testing.T) {
 		t.Fatal(err)
 	}
 	threadListParams := decodeGatewayParamsForTest(t, readUpstreamFrame(t, received))
-	assertGatewayParamsOnly(t, threadListParams, "cwd", "limit", "cursor")
-	if threadListParams["cwd"] != projectDir || threadListParams["cursor"] != "next" {
+	assertGatewayParamsOnly(t, threadListParams, "cwd", "limit", "cursor", "sortKey", "sortDirection", "archived")
+	if threadListParams["cwd"] != projectDir ||
+		threadListParams["cursor"] != "next" ||
+		threadListParams["sortKey"] != "updated_at" ||
+		threadListParams["sortDirection"] != "desc" ||
+		threadListParams["archived"] != false {
 		t.Fatalf("thread/list 合法参数应保留：%v", threadListParams)
 	}
 	_ = readGatewayRaw(t, conn)
+
+	invalidThreadList := []byte(fmt.Sprintf(
+		`{"id":64,"method":"thread/list","params":{"cwd":%q,"limit":20,"sortDirection":"asc"}}`,
+		projectDir,
+	))
+	if err := conn.WriteMessage(websocket.TextMessage, invalidThreadList); err != nil {
+		t.Fatal(err)
+	}
+	errFrame := readGatewayError(t, conn)
+	if !strings.Contains(errFrame.message, "thread/list.sortDirection 不支持") {
+		t.Fatalf("thread/list 非法排序方向应被拒绝，got=%+v", errFrame)
+	}
+	assertNoUpstreamFrame(t, received)
 
 	authorizeGatewayThread(t, conn, received, projectDir, "thread-sanitize")
 

@@ -43,6 +43,22 @@ final class CodexAppServerProtocolTests: XCTestCase {
         XCTAssertNil(sandbox["writableRoots"])
     }
 
+    func testThreadListBuilderUsesStableSidebarSortParams() throws {
+        let project = AgentProject(id: "repo", name: "Repo", path: "/Users/me/repo")
+        let builder = CodexAppServerRequestBuilder(allowlistedProjects: [project])
+
+        let request = try builder.threadList(cwd: project.path, limit: 20, cursor: "older")
+        let params = try XCTUnwrap(request.params?.objectValue)
+
+        XCTAssertEqual(request.method, "thread/list")
+        XCTAssertEqual(params["cwd"]?.stringValue, project.path)
+        XCTAssertEqual(params["limit"]?.intValue, 20)
+        XCTAssertEqual(params["cursor"]?.stringValue, "older")
+        XCTAssertEqual(params["sortKey"]?.stringValue, "updated_at")
+        XCTAssertEqual(params["sortDirection"]?.stringValue, "desc")
+        XCTAssertEqual(params["archived"]?.boolValue, false)
+    }
+
     func testTurnStartBuilderSendsExplicitCollaborationMode() throws {
         let project = AgentProject(id: "repo", name: "Repo", path: "/Users/me/repo")
         let builder = CodexAppServerRequestBuilder(allowlistedProjects: [project])

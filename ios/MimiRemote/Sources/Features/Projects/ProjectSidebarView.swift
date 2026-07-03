@@ -596,11 +596,7 @@ private struct ProjectSessionRows: View {
                         return
                     }
                     Task {
-                        if snapshot.isShowingAll && snapshot.canLoadMore {
-                            await sessionStore.loadMoreSessions(projectID: project.id)
-                        } else {
-                            await sessionStore.toggleSessionListExpansion(projectID: project.id)
-                        }
+                        await sessionStore.toggleSessionListExpansion(projectID: project.id)
                     }
                 }
                 .padding(.leading, 38)

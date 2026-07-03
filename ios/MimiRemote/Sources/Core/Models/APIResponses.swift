@@ -2323,7 +2323,11 @@ struct CodexAppServerRequestBuilder {
         return CodexAppServerRequestSpec(method: "thread/list", params: CodexAppServerJSONValue.objectValue([
             "cwd": .string(path),
             "limit": limit.map { .int(Int64($0)) },
-            "cursor": cursor.map { .string($0) }
+            "cursor": cursor.map { .string($0) },
+            // 列表分页 cursor 必须和本地侧栏排序保持同一基准，避免加载更多后漏掉最新会话。
+            "sortKey": .string("updated_at"),
+            "sortDirection": .string("desc"),
+            "archived": .bool(false)
         ]))
     }
 

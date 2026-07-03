@@ -1206,7 +1206,7 @@ final class SessionStore: ObservableObject {
                 return
             }
             let pageSessions = sessions(page.sessions, in: workspace)
-            replaceSessionsIfChanged(with: pageSessionsPreservingSelection(pageSessions, projectID: projectID), projectID: projectID)
+            replaceSessionsIfChanged(with: pageSessionsPreservingLoadedWindow(pageSessions, projectID: projectID), projectID: projectID)
             updateSessionPageState(projectID: projectID, page: page)
             clearWorkspaceUnavailable(projectID)
 
@@ -2998,7 +2998,7 @@ final class SessionStore: ObservableObject {
             }
             // 只替换当前项目的会话，避免一次项目点击误删其他项目已经加载好的列表。
             let pageSessions = sessions(page.sessions, in: workspace)
-            replaceSessionsIfChanged(with: pageSessionsPreservingSelection(pageSessions, projectID: projectID), projectID: projectID)
+            replaceSessionsIfChanged(with: pageSessionsPreservingLoadedWindow(pageSessions, projectID: projectID), projectID: projectID)
             updateSessionPageState(projectID: projectID, page: page)
             clearWorkspaceUnavailable(projectID)
             if updateStatusMessage {
@@ -3064,6 +3064,29 @@ final class SessionStore: ObservableObject {
         // 分页首屏只取最近会话；如果用户当前停在更旧的历史，会话行必须保留，
         // 否则前台刷新会把右侧正在看的上下文从列表索引里踢掉。
         return fresh + [selected]
+    }
+
+    private func pageSessionsPreservingLoadedWindow(_ fresh: [AgentSession], projectID: String) -> [AgentSession] {
+        var result = pageSessionsPreservingSelection(fresh, projectID: projectID)
+        guard isShowingAllSessions(projectID: projectID) else {
+            return result
+        }
+
+        var knownIDs = Set(result.map(\.id))
+        let olderLoadedSessions = sessions(forProjectID: projectID).filter { session in
+            guard !knownIDs.contains(session.id) else {
+                return false
+            }
+            knownIDs.insert(session.id)
+            return true
+        }
+        guard !olderLoadedSessions.isEmpty else {
+            return result
+        }
+        // 用户已经展开/翻页看到的旧会话属于本地分页窗口；后台首屏刷新只更新最新状态，
+        // 不能把这些旧页踢掉，否则列表会在轮询后从“图二”回跳到“图一”。
+        result.append(contentsOf: olderLoadedSessions)
+        return result
     }
 
     private func sessions(_ items: [AgentSession], in workspace: AgentWorkspace) -> [AgentSession] {

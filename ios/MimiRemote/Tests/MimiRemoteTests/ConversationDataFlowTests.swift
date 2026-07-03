@@ -5008,6 +5008,60 @@ final class ConversationDataFlowTests: XCTestCase {
         XCTAssertEqual(snapshot.actionTitle, "收起显示")
     }
 
+    func testSessionStoreKeepsNewestVisibleAfterLoadingOlderPageAndRefreshing() async {
+        let project = makeProject(id: "proj_sidebar_paging")
+        let firstPage = (0..<8).map { index in
+            makeSession(
+                id: "codex_latest_\(index)",
+                projectID: project.id,
+                title: "最近会话 \(index)",
+                status: "history",
+                source: "codex",
+                resumeID: "latest_\(index)",
+                updatedAt: Date(timeIntervalSince1970: TimeInterval(100 - index))
+            )
+        }
+        let olderPage = [
+            makeSession(
+                id: "codex_older_0",
+                projectID: project.id,
+                title: "更早会话",
+                status: "history",
+                source: "codex",
+                resumeID: "older_0",
+                updatedAt: Date(timeIntervalSince1970: 90)
+            )
+        ]
+        let client = MutableSessionPageClient(
+            projects: [project],
+            page: SessionsPage(sessions: firstPage, nextCursor: "cursor_older", hasMore: true),
+            cursorPages: ["cursor_older": SessionsPage(sessions: olderPage, hasMore: false)]
+        )
+        let store = SessionStore(
+            appStore: AppStore(),
+            conversationStore: ConversationStore(),
+            logStore: LogStore(),
+            clientFactory: { client }
+        )
+
+        store.selectedProjectID = project.id
+        await store.refreshAll(autoAttach: false)
+        await store.toggleSessionListExpansion(projectID: project.id)
+        await store.toggleSessionListExpansion(projectID: project.id)
+
+        var snapshot = store.sessionListSnapshot(forProjectID: project.id)
+        XCTAssertEqual(snapshot.visibleSessions.map(\.id), (firstPage + olderPage).map(\.id))
+        XCTAssertEqual(snapshot.visibleSessions.first?.id, firstPage.first?.id)
+        XCTAssertEqual(snapshot.visibleSessions.last?.id, olderPage.first?.id)
+
+        // 后台首屏刷新只能更新最新页状态，不能把用户已展开加载出的旧页收回。
+        await store.refreshSelectedProjectSessions(showLoading: false)
+
+        snapshot = store.sessionListSnapshot(forProjectID: project.id)
+        XCTAssertEqual(snapshot.visibleSessions.map(\.id), (firstPage + olderPage).map(\.id))
+        XCTAssertEqual(store.sessions(forProjectID: project.id).map(\.id), (firstPage + olderPage).map(\.id))
+    }
+
     func testSessionListSnapshotUpdatesWhenPaginationStateChangesWithoutSessionDiff() async {
         let project = makeProject(id: "proj_1")
         let firstPage = (0..<3).map { index in
@@ -9626,6 +9680,7 @@ private final class MockSessionStoreClient: SessionStoreAPIClient {
 private final class MutableSessionPageClient: SessionStoreAPIClient {
     let projectsResult: [AgentProject]
     var page: SessionsPage
+    var cursorPages: [String: SessionsPage]
     var historyPages: [SessionID: HistoryMessagesPage]
     var historyCursorPages: [String: HistoryMessagesPage]
     var requestedMessageCursors: [String?] = []
@@ -9633,11 +9688,13 @@ private final class MutableSessionPageClient: SessionStoreAPIClient {
     init(
         projects: [AgentProject],
         page: SessionsPage,
+        cursorPages: [String: SessionsPage] = [:],
         historyPages: [SessionID: HistoryMessagesPage] = [:],
         historyCursorPages: [String: HistoryMessagesPage] = [:]
     ) {
         self.projectsResult = projects
         self.page = page
+        self.cursorPages = cursorPages
         self.historyPages = historyPages
         self.historyCursorPages = historyCursorPages
     }
@@ -9651,7 +9708,10 @@ private final class MutableSessionPageClient: SessionStoreAPIClient {
     }
 
     func sessionsPage(projectID: String?, cursor: String?, limit: Int?) async throws -> SessionsPage {
-        page
+        if let cursor, let page = cursorPages[cursor] {
+            return page
+        }
+        return page
     }
 
     func session(id: String, afterSeq: EventSequence?) async throws -> SessionResponse {

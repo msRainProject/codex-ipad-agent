@@ -523,6 +523,11 @@ func (p *appServerGatewayPolicy) validateThreadCapability(frame *appServerGatewa
 
 	switch method {
 	case "thread/list", "thread/start":
+		if method == "thread/list" {
+			if err := validateGatewayThreadListParams(params); err != nil {
+				return err
+			}
+		}
 		if err := p.rememberPendingThreadResponse(frame.ID, method, cwd, scope.id); err != nil {
 			return err
 		}
@@ -705,7 +710,7 @@ func rewriteGatewaySafeDefaults(payload []byte, method string, params map[string
 	case "initialized", "model/list", "account/rateLimits/read":
 		sanitized = map[string]any{}
 	case "thread/list":
-		sanitized = copyGatewayParams(params, "cwd", "limit", "cursor")
+		sanitized = copyGatewayParams(params, "cwd", "limit", "cursor", "sortKey", "sortDirection", "archived")
 	case "thread/read":
 		sanitized = copyGatewayParams(params, "threadId", "includeTurns")
 	case "thread/turns/list":
@@ -785,6 +790,54 @@ func validateGatewayGoalSetParams(params map[string]any) error {
 	if value, ok := params["token_budget"]; ok {
 		if value != nil && !gatewayPositiveJSONNumber(value) {
 			return fmt.Errorf("thread/goal/set.token_budget 必须是正数")
+		}
+	}
+	return nil
+}
+
+func validateGatewayThreadListParams(params map[string]any) error {
+	if value, ok := params["limit"]; ok {
+		if value != nil && !gatewayPositiveJSONNumber(value) {
+			return fmt.Errorf("thread/list.limit 必须是正整数")
+		}
+		if gatewayJSONNumberGreaterThan(value, 200) {
+			return fmt.Errorf("thread/list.limit 不能超过 200")
+		}
+	}
+	if value, ok := params["cursor"]; ok && value != nil {
+		if text, ok := value.(string); !ok || strings.TrimSpace(text) == "" {
+			return fmt.Errorf("thread/list.cursor 必须是非空字符串")
+		}
+	}
+	if value, ok := params["sortKey"]; ok && value != nil {
+		text, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("thread/list.sortKey 必须是字符串")
+		}
+		switch strings.TrimSpace(text) {
+		case "updated_at":
+		default:
+			return fmt.Errorf("thread/list.sortKey 不支持：%s", text)
+		}
+	}
+	if value, ok := params["sortDirection"]; ok && value != nil {
+		text, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("thread/list.sortDirection 必须是字符串")
+		}
+		switch strings.TrimSpace(text) {
+		case "desc":
+		default:
+			return fmt.Errorf("thread/list.sortDirection 不支持：%s", text)
+		}
+	}
+	if value, ok := params["archived"]; ok && value != nil {
+		archived, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("thread/list.archived 必须是布尔值")
+		}
+		if archived {
+			return fmt.Errorf("thread/list.archived 只允许 false")
 		}
 	}
 	return nil
