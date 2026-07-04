@@ -42,6 +42,8 @@ var (
 	appServerGatewayPingPeriod                          = 45 * time.Second
 	appServerGatewayPendingThreadTTL                    = 30 * time.Second
 	appServerGatewayPendingThreadMax                    = 128
+	appServerGatewayPendingClientRequestTTL             = 2 * time.Minute
+	appServerGatewayPendingClientRequestMax             = 256
 	appServerGatewayPendingServerRequestTTL             = 24 * time.Hour
 	appServerGatewayPendingServerRequestMax             = 256
 	appServerGatewayPendingHistoryRequestTTL            = 2 * time.Minute
@@ -183,6 +185,7 @@ type appServerGatewayPolicy struct {
 	mu        sync.Mutex
 
 	pendingThreads        map[string]appServerGatewayPendingThreadRequest
+	pendingClientRequests map[string]appServerGatewayPendingClientRequest
 	pendingServerRequests map[string]appServerGatewayPendingServerRequest
 	pendingHistory        map[string]appServerGatewayPendingHistoryRequest
 	historyBudgets        map[string]appServerGatewayHistoryBudget
@@ -193,6 +196,11 @@ type appServerGatewayPendingThreadRequest struct {
 	method    string
 	cwd       string
 	scopeID   string
+	createdAt time.Time
+}
+
+type appServerGatewayPendingClientRequest struct {
+	method    string
 	createdAt time.Time
 }
 
@@ -551,6 +559,7 @@ func (r *Router) proxyAppServerGateway(ctx context.Context, client *websocket.Co
 		router:                r,
 		runtimeID:             "codex",
 		pendingThreads:        map[string]appServerGatewayPendingThreadRequest{},
+		pendingClientRequests: map[string]appServerGatewayPendingClientRequest{},
 		pendingServerRequests: map[string]appServerGatewayPendingServerRequest{},
 		pendingHistory:        map[string]appServerGatewayPendingHistoryRequest{},
 		historyBudgets:        map[string]appServerGatewayHistoryBudget{},
@@ -736,6 +745,11 @@ func (p *appServerGatewayPolicy) validateClientFrame(messageType int, payload []
 	rewritten, err := rewriteGatewaySafeDefaults(payload, normalizeAppServerRuntimeID(p.runtimeID), method, params, validated)
 	if err != nil {
 		return nil, &appServerGatewayPolicyError{id: frame.ID, message: err.Error()}
+	}
+	if frame.ID != nil && normalizeAppServerRuntimeID(p.runtimeID) == "claude" && method == "model/list" {
+		if err := p.rememberPendingClientRequest(frame.ID, method); err != nil {
+			return nil, &appServerGatewayPolicyError{id: frame.ID, message: err.Error()}
+		}
 	}
 	logGatewayForwardedClientTurnSummary(method, rewritten)
 	return rewritten, nil
@@ -1741,6 +1755,48 @@ func gatewayFrameIsResponse(frame *appServerGatewayFrame) bool {
 		strings.TrimSpace(frame.Method) == "" &&
 		frame.ID != nil &&
 		(len(frame.Result) > 0 || len(frame.Error) > 0)
+}
+
+func (p *appServerGatewayPolicy) rememberPendingClientRequest(id *json.RawMessage, method string) error {
+	key := gatewayRequestIDKey(id)
+	if key == "" {
+		return fmt.Errorf("%s 请求缺少 id", method)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := time.Now()
+	p.prunePendingClientRequestsLocked(now)
+	if p.pendingClientRequests == nil {
+		p.pendingClientRequests = map[string]appServerGatewayPendingClientRequest{}
+	}
+	if _, exists := p.pendingClientRequests[key]; !exists && len(p.pendingClientRequests) >= appServerGatewayPendingClientRequestMax {
+		return fmt.Errorf("gateway pending client request 过多")
+	}
+	p.pendingClientRequests[key] = appServerGatewayPendingClientRequest{method: method, createdAt: now}
+	return nil
+}
+
+func (p *appServerGatewayPolicy) consumePendingClientRequest(id *json.RawMessage) (appServerGatewayPendingClientRequest, bool) {
+	key := gatewayRequestIDKey(id)
+	if key == "" {
+		return appServerGatewayPendingClientRequest{}, false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.prunePendingClientRequestsLocked(time.Now())
+	request, ok := p.pendingClientRequests[key]
+	if ok {
+		delete(p.pendingClientRequests, key)
+	}
+	return request, ok
+}
+
+func (p *appServerGatewayPolicy) prunePendingClientRequestsLocked(now time.Time) {
+	for id, pending := range p.pendingClientRequests {
+		if pending.createdAt.IsZero() || now.Sub(pending.createdAt) > appServerGatewayPendingClientRequestTTL {
+			delete(p.pendingClientRequests, id)
+		}
+	}
 }
 
 func (p *appServerGatewayPolicy) rememberPendingServerRequest(id *json.RawMessage, method string) error {

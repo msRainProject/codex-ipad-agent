@@ -187,6 +187,7 @@ func (r *Router) appServerClaudeGatewayWS(w http.ResponseWriter, req *http.Reque
 		router:                r,
 		runtimeID:             "claude",
 		pendingThreads:        map[string]appServerGatewayPendingThreadRequest{},
+		pendingClientRequests: map[string]appServerGatewayPendingClientRequest{},
 		pendingServerRequests: map[string]appServerGatewayPendingServerRequest{},
 		allowedThreads:        map[string]appServerGatewayAllowedThread{},
 	}
@@ -308,13 +309,16 @@ func copyClaudeBridgeFrames(ctx context.Context, stdout io.Reader, client *webso
 			}
 			continue
 		}
-		writeStart := time.Now()
 		frame := append([]byte(nil), payload...)
+		if rewritten, ok := rewriteClaudeModelListResponse(policy, frame); ok {
+			frame = rewritten
+		}
+		writeStart := time.Now()
 		if err := writeWebSocketFrame(client, clientWriteMu, websocket.TextMessage, frame); err != nil {
 			return gatewayCloseReason("client_write", err)
 		}
 		if monitor != nil {
-			monitor.recordForward("upstream_to_client", len(payload), len(payload), policyDuration, time.Since(writeStart), frame)
+			monitor.recordForward("upstream_to_client", len(payload), len(frame), policyDuration, time.Since(writeStart), frame)
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -354,6 +358,116 @@ func compactJSONLine(payload []byte) ([]byte, error) {
 		return nil, fmt.Errorf("JSON-RPC frame 重编码失败：%w", err)
 	}
 	return compacted, nil
+}
+
+func rewriteClaudeModelListResponse(policy *appServerGatewayPolicy, payload []byte) ([]byte, bool) {
+	if policy == nil {
+		return nil, false
+	}
+	var frame appServerGatewayFrame
+	if err := json.Unmarshal(payload, &frame); err != nil || !gatewayFrameIsResponse(&frame) {
+		return nil, false
+	}
+	pending, ok := policy.consumePendingClientRequest(frame.ID)
+	if !ok || pending.method != "model/list" || len(frame.Error) > 0 {
+		return nil, false
+	}
+	var object map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+	if err := decoder.Decode(&object); err != nil {
+		return nil, false
+	}
+	object["result"] = map[string]any{
+		"data":       claudeCurrentModelList(),
+		"nextCursor": nil,
+	}
+	delete(object, "error")
+	rewritten, err := json.Marshal(object)
+	if err != nil {
+		return nil, false
+	}
+	return rewritten, true
+}
+
+func claudeCurrentModelList() []map[string]any {
+	return []map[string]any{
+		claudeModelOption(
+			"claude-fable-5",
+			"Claude Fable 5",
+			"Anthropic's most capable widely released model for long-running, high-complexity agent work.",
+			false,
+			"high",
+		),
+		claudeModelOption(
+			"claude-opus-4-8",
+			"Claude Opus 4.8",
+			"Best for complex agentic coding, deep reasoning, and enterprise-grade work.",
+			false,
+			"high",
+		),
+		claudeModelOption(
+			"claude-sonnet-5",
+			"Claude Sonnet 5",
+			"Default balanced model for everyday coding work with strong speed, cost, and agentic performance.",
+			true,
+			"high",
+		),
+		claudeModelOption(
+			"claude-haiku-4-5-20251001",
+			"Claude Haiku 4.5",
+			"Fastest Claude model for quick edits, small tasks, and low-latency interactions.",
+			false,
+			"minimal",
+		),
+		claudeModelOption(
+			"opus",
+			"Claude Opus (alias)",
+			"Alias resolved by the Claude CLI to the latest available Opus model.",
+			false,
+			"high",
+		),
+		claudeModelOption(
+			"sonnet",
+			"Claude Sonnet (alias)",
+			"Alias resolved by the Claude CLI to the latest available Sonnet model.",
+			false,
+			"high",
+		),
+		claudeModelOption(
+			"haiku",
+			"Claude Haiku (alias)",
+			"Alias resolved by the Claude CLI to the latest available Haiku model.",
+			false,
+			"minimal",
+		),
+	}
+}
+
+func claudeModelOption(modelID string, displayName string, description string, isDefault bool, defaultEffort string) map[string]any {
+	return map[string]any{
+		"id":                        modelID,
+		"model":                     modelID,
+		"displayName":               displayName,
+		"description":               description,
+		"hidden":                    false,
+		"supportedReasoningEfforts": claudeReasoningEffortOptions(),
+		"defaultReasoningEffort":    defaultEffort,
+		"inputModalities":           []string{"text", "image"},
+		"supportsPersonality":       false,
+		"additionalSpeedTiers":      []any{},
+		"serviceTiers":              []map[string]string{{"id": "standard", "name": "Standard", "description": "Default bridge service tier"}},
+		"isDefault":                 isDefault,
+	}
+}
+
+func claudeReasoningEffortOptions() []map[string]string {
+	return []map[string]string{
+		{"reasoningEffort": "minimal", "description": "Lowest latency, no extended thinking"},
+		{"reasoningEffort": "low", "description": "Brief reasoning"},
+		{"reasoningEffort": "medium", "description": "Default depth of reasoning"},
+		{"reasoningEffort": "high", "description": "Maximum reasoning effort"},
+	}
 }
 
 func pingClientGateway(ctx context.Context, client *websocket.Conn, clientWriteMu *sync.Mutex) {
