@@ -109,6 +109,40 @@ final class ConversationDataFlowTests: XCTestCase {
         XCTAssertFalse(ConversationTimelineView.shouldForceTailFollow(forNewTailMessage: processSummary))
     }
 
+    func testConversationTimelineAllowsInitialTailRetryButRespectsUserScrollAway() {
+        XCTAssertTrue(ConversationTimelineView.shouldAttemptTailScroll(
+            force: false,
+            shouldFollowMessageTail: false,
+            forceNextMessageTailScroll: true,
+            isTailFollowLockedByLocalSubmit: false,
+            isTimelineNearBottom: false
+        ))
+
+        XCTAssertTrue(ConversationTimelineView.shouldAttemptTailScroll(
+            force: false,
+            shouldFollowMessageTail: false,
+            forceNextMessageTailScroll: false,
+            isTailFollowLockedByLocalSubmit: false,
+            isTimelineNearBottom: true
+        ))
+
+        XCTAssertFalse(ConversationTimelineView.shouldAttemptTailScroll(
+            force: false,
+            shouldFollowMessageTail: false,
+            forceNextMessageTailScroll: false,
+            isTailFollowLockedByLocalSubmit: false,
+            isTimelineNearBottom: false
+        ))
+
+        XCTAssertTrue(ConversationTimelineView.shouldAttemptTailScroll(
+            force: true,
+            shouldFollowMessageTail: false,
+            forceNextMessageTailScroll: false,
+            isTailFollowLockedByLocalSubmit: false,
+            isTimelineNearBottom: false
+        ))
+    }
+
     func testTimestampCaptionMarksFallbackTimes() {
         let fallback = ConversationMessage(
             role: .assistant,
