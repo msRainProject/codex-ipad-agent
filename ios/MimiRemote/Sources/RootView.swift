@@ -495,6 +495,7 @@ enum WorkbenchPageLayout {
     static let maxContentWidth: CGFloat = 820
     static let regularPadding: CGFloat = 24
     static let compactPadding: CGFloat = 20
+    static let compactBottomPadding: CGFloat = 132
 }
 
 struct WorkbenchPageHeader: View {
@@ -599,20 +600,11 @@ private struct WorkspaceRootView: View {
         let projects = sessionStore.sidebarProjects
         let columns = workspaceColumns(usesSplitLayout: usesSplitLayout, availableWidth: availableWidth)
         let cardHeight = workspaceCardHeight(usesSplitLayout: usesSplitLayout, availableWidth: availableWidth)
+        let usesCompactCards = !usesSplitLayout
 
         return ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                HStack(alignment: .top, spacing: 16) {
-                    WorkbenchPageHeader(
-                        title: "工作区",
-                        subtitle: workspaceSummary,
-                        tokens: tokens
-                    )
-
-                    Spacer(minLength: 0)
-
-                    workspaceHeaderActions(tokens: tokens, projects: projects)
-                }
+                workspaceGridHeader(tokens: tokens, projects: projects, usesSplitLayout: usesSplitLayout)
 
                 if projects.isEmpty && !sessionStore.isLoading {
                     WorkspaceEmptyStateCard(
@@ -635,6 +627,7 @@ private struct WorkspaceRootView: View {
                                 sessionCount: sessionStore.sessions(forProjectID: project.id).count,
                                 worktreeCount: managedWorktreeCount(for: project),
                                 cardHeight: cardHeight,
+                                usesCompactLayout: usesCompactCards,
                                 onSelect: {
                                     Task { await sessionStore.selectProject(project) }
                                 },
@@ -660,11 +653,40 @@ private struct WorkspaceRootView: View {
             }
             .padding(.horizontal, usesSplitLayout ? WorkbenchPageLayout.regularPadding : WorkbenchPageLayout.compactPadding)
             .padding(.top, usesSplitLayout ? WorkbenchPageLayout.regularPadding : WorkbenchPageLayout.compactPadding)
-            .padding(.bottom, WorkbenchPageLayout.regularPadding)
+            .padding(.bottom, usesSplitLayout ? WorkbenchPageLayout.regularPadding : WorkbenchPageLayout.compactBottomPadding)
         }
         .background(tokens.background.ignoresSafeArea())
         .refreshable {
             await sessionStore.refreshAll(autoAttach: false)
+        }
+    }
+
+    @ViewBuilder
+    private func workspaceGridHeader(tokens: ThemeTokens, projects: [AgentProject], usesSplitLayout: Bool) -> some View {
+        if usesSplitLayout {
+            HStack(alignment: .top, spacing: 16) {
+                WorkbenchPageHeader(
+                    title: "工作区",
+                    subtitle: workspaceSummary,
+                    tokens: tokens
+                )
+
+                Spacer(minLength: 0)
+
+                workspaceHeaderActions(tokens: tokens, projects: projects)
+            }
+        } else {
+            HStack(alignment: .center, spacing: 12) {
+                Text(workspaceSummary)
+                    .font(themeStore.uiFont(.callout, weight: .medium))
+                    .foregroundStyle(tokens.secondaryText)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Spacer(minLength: 0)
+
+                workspaceHeaderActions(tokens: tokens, projects: projects)
+            }
         }
     }
 
@@ -730,14 +752,14 @@ private struct WorkspaceRootView: View {
                 GridItem(.flexible(minimum: 0), spacing: 14)
             ]
         }
-        return [GridItem(.adaptive(minimum: 168, maximum: 340), spacing: 14)]
+        return [GridItem(.flexible(minimum: 0), spacing: 14)]
     }
 
     private func workspaceCardHeight(usesSplitLayout: Bool, availableWidth: CGFloat) -> CGFloat {
         if usesSplitLayout {
             return availableWidth >= 520 ? 238 : 224
         }
-        return 210
+        return 142
     }
 
     private var workspaceSummary: String {
@@ -824,6 +846,7 @@ private struct WorkspaceFolderCard: View {
     let sessionCount: Int
     let worktreeCount: Int
     let cardHeight: CGFloat
+    let usesCompactLayout: Bool
     let onSelect: () -> Void
     let onToggleSessionVisibility: () -> Void
 
@@ -833,6 +856,14 @@ private struct WorkspaceFolderCard: View {
         let cardFill = isSelected ? tokens.accent.opacity(0.13) : tokens.elevatedSurface.opacity(0.78)
         let cardStroke = isSelected ? tokens.accent : tokens.border.opacity(0.86)
 
+        if usesCompactLayout {
+            compactBody(tokens: tokens, statusTone: statusTone, cardFill: cardFill, cardStroke: cardStroke)
+        } else {
+            regularBody(tokens: tokens, statusTone: statusTone, cardFill: cardFill, cardStroke: cardStroke)
+        }
+    }
+
+    private func regularBody(tokens: ThemeTokens, statusTone: Color, cardFill: Color, cardStroke: Color) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             Button(action: onSelect) {
                 VStack(alignment: .leading, spacing: 14) {
@@ -893,6 +924,79 @@ private struct WorkspaceFolderCard: View {
         }
     }
 
+    private func compactBody(tokens: ThemeTokens, statusTone: Color, cardFill: Color, cardStroke: Color) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Button(action: onSelect) {
+                HStack(alignment: .top, spacing: 12) {
+                    WorkspaceFolderGlyph(
+                        isSelected: isSelected,
+                        isUnavailable: isUnavailable,
+                        size: .compact
+                    )
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(project.name)
+                                .font(themeStore.uiFont(.headline, weight: .semibold))
+                                .foregroundStyle(tokens.primaryText)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.82)
+
+                            Spacer(minLength: 8)
+
+                            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: isSelected ? 18 : 15, weight: .semibold))
+                                .foregroundStyle(isSelected ? tokens.accent : tokens.tertiaryText)
+                        }
+
+                        Text(project.path)
+                            .font(themeStore.uiFont(.caption))
+                            .foregroundStyle(tokens.secondaryText)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            HStack(spacing: 8) {
+                WorkspaceMetricChip(value: "\(sessionCount)", title: "会话", systemImage: "bubble.left.and.text.bubble.right")
+                WorkspaceMetricChip(value: "\(worktreeCount)", title: "Worktree", systemImage: "arrow.triangle.branch")
+
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(statusTone)
+                        .frame(width: 7, height: 7)
+                    Text(isUnavailable ? "异常" : "正常")
+                        .font(themeStore.uiFont(.caption, weight: .semibold))
+                        .foregroundStyle(tokens.secondaryText)
+                        .lineLimit(1)
+                }
+                .accessibilityLabel(isUnavailable ? "不可用" : "可访问")
+
+                Spacer(minLength: 0)
+
+                sessionVisibilityCompactButton
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, minHeight: cardHeight, maxHeight: cardHeight, alignment: .topLeading)
+        .background(cardFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(alignment: .leading) {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(tokens.accent)
+                    .frame(width: 4)
+                    .padding(.vertical, 12)
+            }
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(cardStroke, lineWidth: isSelected ? 2 : 1)
+        }
+    }
+
     @ViewBuilder
     private var sessionVisibilityButton: some View {
         let tokens = themeStore.tokens(for: colorScheme)
@@ -929,6 +1033,27 @@ private struct WorkspaceFolderCard: View {
             .controlSize(.small)
         }
     }
+
+    private var sessionVisibilityCompactButton: some View {
+        let tokens = themeStore.tokens(for: colorScheme)
+
+        return Button(action: onToggleSessionVisibility) {
+            Label(isShownInSessions ? "会话中" : "加入", systemImage: isShownInSessions ? "checkmark.circle.fill" : "plus.circle")
+                .font(themeStore.uiFont(.caption, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(tokens.accent)
+        .background((isShownInSessions ? tokens.accent : tokens.surface).opacity(isShownInSessions ? 0.14 : 0.72), in: Capsule())
+        .overlay {
+            Capsule()
+                .stroke(isShownInSessions ? tokens.accent.opacity(0.26) : tokens.border.opacity(0.72), lineWidth: 1)
+        }
+        .accessibilityLabel(isShownInSessions ? "从会话页移除" : "加入会话页")
+    }
 }
 
 private struct WorkspaceMetricChip: View {
@@ -960,12 +1085,15 @@ private struct WorkspaceMetricChip: View {
 private struct WorkspaceFolderGlyph: View {
     enum Size {
         case large
+        case compact
         case header
 
         var width: CGFloat {
             switch self {
             case .large:
                 return 52
+            case .compact:
+                return 44
             case .header:
                 return 40
             }
@@ -975,6 +1103,8 @@ private struct WorkspaceFolderGlyph: View {
             switch self {
             case .large:
                 return 52
+            case .compact:
+                return 44
             case .header:
                 return 40
             }
@@ -1300,13 +1430,22 @@ private struct ProfileRootView: View {
     }
 
     private func profileContent(tokens: ThemeTokens) -> some View {
-        ScrollView {
+        let isCompact = horizontalSizeClass == .compact
+
+        return ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                WorkbenchPageHeader(
-                    title: "我的",
-                    subtitle: "管理 Mac 连接、模型和工具能力。",
-                    tokens: tokens
-                )
+                if isCompact {
+                    Text("管理 Mac 连接、模型和工具能力。")
+                        .font(themeStore.uiFont(.callout, weight: .medium))
+                        .foregroundStyle(tokens.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    WorkbenchPageHeader(
+                        title: "我的",
+                        subtitle: "管理 Mac 连接、模型和工具能力。",
+                        tokens: tokens
+                    )
+                }
 
                 MacConnectionPanel()
 
@@ -1344,7 +1483,9 @@ private struct ProfileRootView: View {
                     )
                 }
             }
-            .padding(WorkbenchPageLayout.regularPadding)
+            .padding(.horizontal, isCompact ? WorkbenchPageLayout.compactPadding : WorkbenchPageLayout.regularPadding)
+            .padding(.top, isCompact ? WorkbenchPageLayout.compactPadding : WorkbenchPageLayout.regularPadding)
+            .padding(.bottom, isCompact ? WorkbenchPageLayout.compactBottomPadding : WorkbenchPageLayout.regularPadding)
             .frame(maxWidth: WorkbenchPageLayout.maxContentWidth, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .center)
         }
@@ -1359,6 +1500,7 @@ private struct ProfileRootView: View {
 }
 
 private struct MacConnectionPanel: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var appStore: AppStore
     @EnvironmentObject private var sessionStore: SessionStore
@@ -1375,26 +1517,7 @@ private struct MacConnectionPanel: View {
         let tokens = themeStore.tokens(for: colorScheme)
 
         VStack(alignment: .leading, spacing: 16) {
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .center, spacing: 14) {
-                    connectionSummaryRow(tokens: tokens)
-                    Spacer(minLength: 16)
-                    HStack(spacing: 10) {
-                        connectionActions()
-                    }
-                }
-                VStack(alignment: .leading, spacing: 14) {
-                    connectionSummaryRow(tokens: tokens)
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 10) {
-                            connectionActions()
-                        }
-                        VStack(alignment: .leading, spacing: 10) {
-                            connectionActions()
-                        }
-                    }
-                }
-            }
+            connectionHeaderAndActions(tokens: tokens)
 
             connectionDiagnostics(tokens: tokens)
 
@@ -1438,6 +1561,32 @@ private struct MacConnectionPanel: View {
         .sheet(isPresented: $isShowingQRCodeScanner) {
             QRCodeScannerSheet { rawValue in
                 Task { await applyScannedConnection(rawValue) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func connectionHeaderAndActions(tokens: ThemeTokens) -> some View {
+        if horizontalSizeClass == .compact {
+            VStack(alignment: .leading, spacing: 14) {
+                connectionSummaryRow(tokens: tokens)
+                compactConnectionActions
+            }
+        } else {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center, spacing: 14) {
+                    connectionSummaryRow(tokens: tokens)
+                    Spacer(minLength: 16)
+                    HStack(spacing: 10) {
+                        connectionActions()
+                    }
+                }
+                VStack(alignment: .leading, spacing: 14) {
+                    connectionSummaryRow(tokens: tokens)
+                    HStack(spacing: 10) {
+                        connectionActions()
+                    }
+                }
             }
         }
     }
@@ -1536,6 +1685,88 @@ private struct MacConnectionPanel: View {
             .buttonStyle(.bordered)
             .disabled(isSavingConnection)
         }
+    }
+
+    private var compactConnectionActions: some View {
+        LazyVGrid(
+            columns: [
+                GridItem(.flexible(minimum: 0), spacing: 10),
+                GridItem(.flexible(minimum: 0), spacing: 10)
+            ],
+            alignment: .leading,
+            spacing: 10
+        ) {
+            scanConnectionCompactButton
+
+            if appStore.isConfigured || isShowingManualFields {
+                testConnectionCompactButton
+                saveConnectionCompactButton
+            }
+
+            if appStore.isConfigured {
+                forgetConnectionCompactButton
+            }
+        }
+    }
+
+    private func compactActionLabel(_ title: String, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(themeStore.uiFont(.callout, weight: .semibold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.78)
+            .frame(maxWidth: .infinity)
+            .frame(height: 38)
+    }
+
+    @ViewBuilder
+    private var scanConnectionCompactButton: some View {
+        if appStore.isConfigured {
+            Button {
+                isShowingQRCodeScanner = true
+            } label: {
+                compactActionLabel("扫码连接", systemImage: "qrcode.viewfinder")
+            }
+            .buttonStyle(.bordered)
+            .disabled(isSavingConnection)
+        } else {
+            Button {
+                isShowingQRCodeScanner = true
+            } label: {
+                compactActionLabel("扫码连接", systemImage: "qrcode.viewfinder")
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(isSavingConnection)
+        }
+    }
+
+    private var testConnectionCompactButton: some View {
+        Button {
+            Task { await appStore.testConnection(endpoint: endpoint, token: token) }
+        } label: {
+            compactActionLabel(isConnectionTesting ? "测试中" : "测试连接", systemImage: isConnectionTesting ? "timer" : "bolt.horizontal.circle")
+        }
+        .buttonStyle(.bordered)
+        .disabled(!canSubmit)
+    }
+
+    private var saveConnectionCompactButton: some View {
+        Button {
+            Task { await saveManualConnection() }
+        } label: {
+            compactActionLabel(isSavingConnection ? "保存中" : "保存连接", systemImage: "checkmark.circle")
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(!canSubmit)
+    }
+
+    private var forgetConnectionCompactButton: some View {
+        Button(role: .destructive) {
+            clearPairing()
+        } label: {
+            compactActionLabel("忘记", systemImage: "trash")
+        }
+        .buttonStyle(.bordered)
+        .disabled(isSavingConnection)
     }
 
     @ViewBuilder
