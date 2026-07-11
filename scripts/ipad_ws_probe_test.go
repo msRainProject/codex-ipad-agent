@@ -109,3 +109,60 @@ func TestThreadListParamsUseIndexedFastPath(t *testing.T) {
 		t.Fatalf("日常探针必须覆盖 Codex 状态库快路径：%v", params)
 	}
 }
+
+func TestProbeEventObservationRejectsClaudeAuthenticationFailure(t *testing.T) {
+	event := rpcFrame{
+		Method: "item/completed",
+		Params: map[string]any{
+			"item": map[string]any{
+				"type":              "agentMessage",
+				"text":              "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+				"isApiErrorMessage": true,
+				"error":             "authentication_failed",
+			},
+		},
+	}
+
+	text, failure := probeEventObservation(event)
+	if text == "" {
+		t.Fatal("探针必须识别 completed agentMessage，避免把真实回复漏掉")
+	}
+	if failure == "" {
+		t.Fatal("Claude 401 不能因为收到 turn/completed 就被误判为成功")
+	}
+}
+
+func TestProbeEventObservationExtractsAssistantDelta(t *testing.T) {
+	event := rpcFrame{
+		Method: "item/agentMessage/delta",
+		Params: map[string]any{"threadId": "thread-1", "delta": "ok"},
+	}
+
+	text, failure := probeEventObservation(event)
+	if text != "ok" || failure != "" {
+		t.Fatalf("正常 assistant delta 应被视为有效回复：text=%q failure=%q", text, failure)
+	}
+}
+
+func TestCompletedTurnFailureRequiresAssistantOutput(t *testing.T) {
+	completed := rpcFrame{Method: "turn/completed", Params: map[string]any{
+		"turn": map[string]any{"id": "turn-1", "status": "completed"},
+	}}
+	if failure := completedTurnFailure(false, completed); failure == "" {
+		t.Fatal("没有任何 assistant 输出的 completed turn 必须判失败")
+	}
+	if failure := completedTurnFailure(true, completed); failure != "" {
+		t.Fatalf("有正常 assistant 输出的 completed turn 不应失败：%s", failure)
+	}
+
+	failed := rpcFrame{Method: "turn/completed", Params: map[string]any{
+		"turn": map[string]any{
+			"id":     "turn-2",
+			"status": "failed",
+			"error":  map[string]any{"message": "runtime unavailable"},
+		},
+	}}
+	if failure := completedTurnFailure(true, failed); failure == "" {
+		t.Fatal("turn.status=failed 即使曾有 delta 也必须判失败")
+	}
+}

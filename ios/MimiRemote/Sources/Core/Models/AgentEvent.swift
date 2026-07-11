@@ -19,7 +19,7 @@ enum AgentEvent {
     case userInputResolved(AgentEventMetadata, skipped: Bool)
     case turnCompleted(AgentEventMetadata)
     case warning(AgentErrorPayload, AgentEventMetadata)
-    case error(String)
+    case error(AgentErrorPayload, AgentEventMetadata)
     case unknown(String)
 }
 
@@ -103,7 +103,10 @@ extension AgentEvent: Decodable {
         case "warning":
             self = .warning(try Self.decodePayload(from: container, key: .warning, fallback: "未知警告"), metadata)
         case "error":
-            self = .error(try container.decodeIfPresent(String.self, forKey: .error) ?? "未知错误")
+            self = .error(
+                try Self.decodePayload(from: container, key: .error, fallback: "未知错误"),
+                metadata
+            )
         default:
             self = .unknown(type)
         }
@@ -342,7 +345,7 @@ struct CodexAppServerEventProjector {
         case "warning":
             return .warning(errorPayload(from: params, fallback: "app-server warning"), metadata)
         case "error":
-            return .error(firstString(in: params, keys: ["message", "error"]) ?? nestedString(in: params, key: "error", nestedKey: "message") ?? "app-server error")
+            return .error(errorPayload(from: params, fallback: "app-server error"), metadata)
         default:
             return nil
         }

@@ -1,210 +1,369 @@
 import SwiftUI
 
+enum SessionIndexRowStyle {
+    case sidebar
+    case library
+}
+
+enum SessionLibraryStatusFilter: String, CaseIterable, Identifiable {
+    case all
+    case active
+    case needsAttention
+    case completed
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all: return "全部状态"
+        case .active: return "运行中"
+        case .needsAttention: return "需要处理"
+        case .completed: return "已完成"
+        }
+    }
+
+    func includes(_ session: AgentSession) -> Bool {
+        switch self {
+        case .all:
+            return true
+        case .active:
+            return session.isRunning
+        case .needsAttention:
+            return session.pendingApproval != nil ||
+                session.pendingUserInput != nil ||
+                session.status == SessionStatus.failed.rawValue
+        case .completed:
+            return !session.isRunning && session.status != SessionStatus.failed.rawValue
+        }
+    }
+}
+
+/// 完整会话库只展示轻量索引；消息历史仍在用户选中会话后按需加载。
 struct SessionListView: View {
     @EnvironmentObject private var sessionStore: SessionStore
     @EnvironmentObject private var themeStore: ThemeStore
     @Environment(\.colorScheme) private var colorScheme
+    @State private var selectedWorkspaceID = "all"
+    @State private var selectedStatus: SessionLibraryStatusFilter = .all
+
+    var onNewSession: (() -> Void)?
+    var onSelectSession: ((AgentSession) -> Void)?
 
     var body: some View {
         let tokens = themeStore.tokens(for: colorScheme)
 
         List {
-            Section {
-                Button {
-                    Task { await sessionStore.startNewSession() }
-                } label: {
-                    Label("新建会话", systemImage: "plus.circle")
+            if visibleSessions.isEmpty && !sessionStore.isLoading {
+                ContentUnavailableView {
+                    Label("没有匹配的会话", systemImage: "bubble.left.and.bubble.right")
+                } description: {
+                    Text(sessionStore.isSessionSearchActive ? "换个关键词或筛选条件试试。" : "从一个工作区创建新会话后会显示在这里。")
+                } actions: {
+                    Button("新会话", action: presentNewSession)
+                        .buttonStyle(.borderedProminent)
+                        .tint(tokens.primaryAction)
                 }
-
-                // 会话在创建瞬间就绑定 runtime；Claude 通道必须在入口显式选择，
-                // 建好之后模型菜单只会显示所属通道的模型。
-                if sessionStore.hasClaudeRuntimeChannel {
-                    Button {
-                        Task { await sessionStore.startNewSession(runtimeProvider: "claude") }
-                    } label: {
-                        Label("新建 Claude Code 会话", systemImage: "sparkles")
-                    }
-                }
-
-                ForEach(sessionStore.filteredSessions) { session in
-                    Button {
-                        Task { await sessionStore.selectSession(session) }
-                    } label: {
-                        SessionListRow(
-                            session: session,
-                            foregroundActivity: sessionStore.foregroundActivity(for: session.id),
-                            isSelected: session.id == sessionStore.selectedSessionID,
-                            isObserving: sessionStore.isSessionObserving(session)
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .contextMenu {
-                        if sessionStore.isSessionObserving(session) {
-                            Button {
-                                sessionStore.takeOverSession(session)
-                            } label: {
-                                Label("接管到 iPad", systemImage: "hand.raised.fill")
-                            }
-                        }
-
-                        Button {
-                            Task { await sessionStore.handoffSessionToWorktree(session) }
-                        } label: {
-                            Label("转到新 Git Worktree", systemImage: "arrow.triangle.branch")
-                        }
-                        .disabled(session.isRunning || sessionStore.isCreatingWorktree)
-                    }
-                }
-            } header: {
-                HStack {
-                    Text(sessionStore.selectedProject?.name ?? "会话")
-                        .font(themeStore.uiFont(size: 12, weight: .semibold))
-                        .foregroundStyle(tokens.tertiaryText)
-                    Spacer()
-                    Button {
-                        Task { await sessionStore.refreshSelectedProjectSessions() }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .buttonStyle(.borderless)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+            } else {
+                ForEach(visibleSessions) { session in
+                    SessionIndexRow(
+                        session: session,
+                        foregroundActivity: sessionStore.foregroundActivity(for: session.id),
+                        isSelected: session.id == sessionStore.selectedSessionID,
+                        isPinned: sessionStore.isSessionPinned(session.id),
+                        isArchived: sessionStore.isSessionArchived(session.id),
+                        reminder: sessionStore.sessionReminder(for: session.id),
+                        isObserving: sessionStore.isSessionObserving(session),
+                        style: .library
+                    )
+                    .contentShape(Rectangle())
+                    .onTapGesture { select(session) }
+                    .sessionRowActions(session)
+                    .listRowInsets(.init(top: 4, leading: 20, bottom: 4, trailing: 20))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
                 }
             }
         }
+        .listStyle(.plain)
         .scrollContentBackground(.hidden)
-        .background(tokens.background)
-        .overlay {
-            if sessionStore.filteredSessions.isEmpty && !sessionStore.isLoading {
-                ContentUnavailableView(
-                    "没有历史会话",
-                    systemImage: "clock.arrow.circlepath",
-                    description: Text("该项目暂无可继续的会话历史。")
-                )
+        .background(tokens.background.ignoresSafeArea())
+        .navigationTitle("会话")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $sessionStore.sessionSearchQuery, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "搜索会话")
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                filterMenu(tokens: tokens)
+            }
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    Task { await sessionStore.refreshSessionLibraryIndex() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .accessibilityLabel("刷新会话库")
+
+                Button(action: presentNewSession) {
+                    Label("新会话", systemImage: "plus")
+                }
+                .buttonStyle(.glassProminent)
+                .tint(tokens.primaryAction)
             }
         }
-        .refreshable {
-            await sessionStore.refreshSelectedProjectSessions()
+        .task {
+            await sessionStore.refreshSessionLibraryIndex()
+        }
+    }
+
+    private var visibleSessions: [AgentSession] {
+        sessionStore.sessionLibrarySessions.filter { session in
+            (selectedWorkspaceID == "all" || session.projectID == selectedWorkspaceID) &&
+                selectedStatus.includes(session)
+        }
+    }
+
+    private func filterMenu(tokens: ThemeTokens) -> some View {
+        Menu {
+            Section("工作区") {
+                Button {
+                    selectedWorkspaceID = "all"
+                } label: {
+                    Label("全部工作区", systemImage: selectedWorkspaceID == "all" ? "checkmark" : "folder")
+                }
+                ForEach(sessionStore.sidebarProjects) { project in
+                    Button {
+                        selectedWorkspaceID = project.id
+                    } label: {
+                        Label(project.name, systemImage: selectedWorkspaceID == project.id ? "checkmark" : "folder")
+                    }
+                }
+            }
+            Section("状态") {
+                ForEach(SessionLibraryStatusFilter.allCases) { filter in
+                    Button {
+                        selectedStatus = filter
+                    } label: {
+                        Label(filter.title, systemImage: selectedStatus == filter ? "checkmark" : "line.3.horizontal.decrease.circle")
+                    }
+                }
+            }
+        } label: {
+            Label(filterTitle, systemImage: "line.3.horizontal.decrease")
+                .foregroundStyle(tokens.secondaryText)
+        }
+        .accessibilityLabel("筛选会话")
+    }
+
+    private var filterTitle: String {
+        if selectedWorkspaceID != "all",
+           let project = sessionStore.sidebarProjects.first(where: { $0.id == selectedWorkspaceID }) {
+            return project.name
+        }
+        return selectedStatus == .all ? "筛选" : selectedStatus.title
+    }
+
+    private func presentNewSession() {
+        if let onNewSession {
+            onNewSession()
+        } else {
+            Task { await sessionStore.startNewSession() }
+        }
+    }
+
+    private func select(_ session: AgentSession) {
+        if let onSelectSession {
+            onSelectSession(session)
+        } else {
+            Task { await sessionStore.selectSession(session) }
         }
     }
 }
 
-private struct SessionListRow: View {
+struct SessionIndexRow: View {
     @EnvironmentObject private var themeStore: ThemeStore
     @Environment(\.colorScheme) private var colorScheme
+
     let session: AgentSession
     let foregroundActivity: SessionForegroundActivity?
     let isSelected: Bool
+    let isPinned: Bool
+    let isArchived: Bool
+    let reminder: SessionReminder?
     let isObserving: Bool
+    let style: SessionIndexRowStyle
 
     var body: some View {
         let tokens = themeStore.tokens(for: colorScheme)
 
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline) {
-                Circle()
-                    .fill(statusDotColor)
-                    .frame(width: 7, height: 7)
+        VStack(alignment: .leading, spacing: style == .sidebar ? 3 : 7) {
+            HStack(alignment: .center, spacing: 7) {
+                if style == .library {
+                    Circle()
+                        .fill(statusColor(tokens: tokens))
+                        .frame(width: 7, height: 7)
+                }
+
                 Text(session.title)
-                    .font(themeStore.uiFont(size: 15, weight: isSelected ? .semibold : .regular))
+                    .font(themeStore.uiFont(size: style == .sidebar ? 14 : 16, weight: isSelected ? .semibold : .medium))
                     .foregroundStyle(tokens.primaryText)
-                    .lineLimit(2)
+                    .lineLimit(style == .sidebar ? 1 : 2)
                     .layoutPriority(1)
+
                 Spacer(minLength: 8)
-                StatusPill(text: statusSummary.title, kind: statusKind)
-                    .fixedSize(horizontal: true, vertical: false)
-            }
 
-            if let preview = session.preview, !preview.isEmpty {
-                Text(preview)
-                    .font(themeStore.uiFont(size: 12))
-                    .foregroundStyle(tokens.secondaryText)
-                    .lineLimit(2)
-            }
-
-            HStack {
-                Text(sourceText)
-                Spacer()
-                if let updatedAt = session.updatedAt {
-                    Text(Self.minuteTimeFormatter.string(from: updatedAt))
+                if status.showsSpinner && style == .library {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(statusColor(tokens: tokens))
+                } else if style == .library {
+                    Text(timestampText)
+                        .font(themeStore.uiFont(.caption))
+                        .foregroundStyle(tokens.tertiaryText)
+                        .fixedSize()
                 }
             }
-            .font(themeStore.uiFont(size: 12))
+
+            HStack(spacing: 6) {
+                if isPinned { Image(systemName: "pin.fill") }
+                if isArchived { Image(systemName: "archivebox.fill") }
+                if reminder != nil { Image(systemName: "bell.fill").foregroundStyle(tokens.warning) }
+
+                Text(session.project.isEmpty ? session.dir : session.project)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                HStack(spacing: 3) {
+                    Circle()
+                        .fill(statusColor(tokens: tokens))
+                        .frame(width: style == .sidebar ? 4 : 5, height: style == .sidebar ? 4 : 5)
+                    Text(status.title)
+                        .font(themeStore.uiFont(size: style == .sidebar ? 9 : 11, weight: .medium))
+                        .foregroundStyle(statusColor(tokens: tokens))
+                }
+
+                if style == .sidebar {
+                    Text("·")
+                    Text(timestampText)
+                }
+            }
+            .font(themeStore.uiFont(size: style == .sidebar ? 10 : 12, weight: .regular))
             .foregroundStyle(tokens.tertiaryText)
-
-            if !metricChips.isEmpty {
-                HStack(spacing: 6) {
-                    ForEach(metricChips) { chip in
-                        Label(chip.title, systemImage: chip.systemImage)
-                            .font(themeStore.uiFont(size: 11, weight: .medium))
-                            .lineLimit(1)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 4)
-                            .background(tint(for: chip.tone).opacity(0.12), in: Capsule())
-                            .foregroundStyle(tint(for: chip.tone))
-                    }
-                }
+            .lineLimit(1)
+        }
+        .padding(.horizontal, style == .sidebar ? 10 : 14)
+        .padding(.vertical, style == .sidebar ? 6 : 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(isSelected ? tokens.selectionFill : (style == .library ? tokens.surface.opacity(0.58) : Color.clear), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(alignment: .leading) {
+            if isSelected {
+                Capsule()
+                    .fill(tokens.primaryAction)
+                    .frame(width: 3)
+                    .padding(.vertical, 9)
+                    .padding(.leading, 2)
             }
         }
-        .padding(.vertical, 6)
-        .padding(.horizontal, 8)
-        .background(isSelected ? tokens.selectionFill : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(isSelected ? tokens.accent.opacity(0.45) : Color.clear, lineWidth: 1)
+            if style == .library {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(isSelected ? tokens.primaryAction.opacity(0.34) : tokens.border.opacity(0.58), lineWidth: 1)
+            }
         }
     }
 
-    private var statusSummary: AgentSessionDisplayStatus {
+    private var status: AgentSessionDisplayStatus {
         if isObserving {
             return AgentSessionDisplayStatus(title: "观察中", systemImage: "eye", tone: .neutral, showsSpinner: false)
         }
         return session.displayStatus(foregroundActivity: foregroundActivity)
     }
 
-    private var statusKind: StatusPill.Kind {
-        switch statusSummary.tone {
-        case .active, .complete:
-            return .success
-        case .warning, .danger:
-            return .warning
-        case .neutral:
-            return .neutral
+    private func statusColor(tokens: ThemeTokens) -> Color {
+        switch status.tone {
+        case .active: return tokens.primaryAction
+        case .warning: return tokens.warning
+        case .danger: return .red
+        case .complete, .neutral: return tokens.tertiaryText
         }
     }
 
-    private var statusDotColor: Color {
-        let tokens = themeStore.tokens(for: colorScheme)
-        switch statusKind {
-        case .success:
-            return tokens.success
-        case .warning:
-            return tokens.warning
-        case .neutral:
-            return .secondary.opacity(0.55)
+    private var timestampText: String {
+        guard let date = session.updatedAt ?? session.createdAt else { return "" }
+        if Calendar.current.isDateInToday(date) {
+            return Self.timeFormatter.string(from: date)
         }
+        return Self.dateFormatter.string(from: date)
     }
 
-    private var sourceText: String {
-        switch session.source {
-        case "local":
-            return "本地回显"
-        default:
-            return session.isRunning ? "app-server" : "会话历史"
-        }
-    }
-
-    private var metricChips: [AgentSessionStatusBadge] {
-        session.statusBadges(foregroundActivity: foregroundActivity)
-    }
-
-    private func tint(for tone: AgentSessionStatusTone) -> Color {
-        themeStore.tokens(for: colorScheme).tint(for: tone)
-    }
-
-    // 左侧列表只需要分钟级时间；避免 SwiftUI relative 文本按秒刷新导致整列跳动。
-    private static let minuteTimeFormatter: DateFormatter = {
+    private static let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "zh_CN")
         formatter.dateFormat = "HH:mm"
         return formatter
     }()
+
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "M月d日"
+        return formatter
+    }()
+}
+
+private struct SessionRowActions: ViewModifier {
+    @EnvironmentObject private var sessionStore: SessionStore
+    let session: AgentSession
+
+    func body(content: Content) -> some View {
+        let isPinned = sessionStore.isSessionPinned(session.id)
+        let isArchived = sessionStore.isSessionArchived(session.id)
+        let reminder = sessionStore.sessionReminder(for: session.id)
+
+        content.contextMenu {
+            if sessionStore.isSessionObserving(session) {
+                Button {
+                    sessionStore.takeOverSession(session)
+                } label: {
+                    Label("接管到 iPad", systemImage: "hand.raised.fill")
+                }
+            }
+
+            Button {
+                sessionStore.toggleSessionPinned(session)
+            } label: {
+                Label(isPinned ? "取消置顶" : "置顶", systemImage: isPinned ? "pin.slash" : "pin")
+            }
+
+            Button {
+                Task { await sessionStore.handoffSessionToWorktree(session) }
+            } label: {
+                Label("转到新 Git Worktree", systemImage: "arrow.triangle.branch")
+            }
+            .disabled(session.isRunning || sessionStore.isCreatingWorktree)
+
+            Menu {
+                Button("30 分钟后") { Task { await sessionStore.scheduleSessionReminder(session, after: 30 * 60) } }
+                Button("2 小时后") { Task { await sessionStore.scheduleSessionReminder(session, after: 2 * 60 * 60) } }
+                Button("明天") { Task { await sessionStore.scheduleSessionReminder(session, after: 24 * 60 * 60) } }
+                if reminder != nil {
+                    Button("清除提醒", role: .destructive) { sessionStore.clearSessionReminder(session) }
+                }
+            } label: {
+                Label("提醒", systemImage: reminder == nil ? "bell" : "bell.fill")
+            }
+
+            Button(role: isArchived ? nil : .destructive) {
+                Task { await sessionStore.toggleSessionArchivedRemote(session) }
+            } label: {
+                Label(isArchived ? "取消归档" : "归档", systemImage: isArchived ? "archivebox.fill" : "archivebox")
+            }
+        }
+    }
+}
+
+extension View {
+    func sessionRowActions(_ session: AgentSession) -> some View {
+        modifier(SessionRowActions(session: session))
+    }
 }

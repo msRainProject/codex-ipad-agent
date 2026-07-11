@@ -1,5 +1,14 @@
 import SwiftUI
 
+private extension Color {
+    /// 产品默认主操作色 #4A144A。集中定义，避免按钮、消息和色卡分别取近似值。
+    static let mimiPrimary = Color(
+        red: 74.0 / 255.0,
+        green: 20.0 / 255.0,
+        blue: 74.0 / 255.0
+    )
+}
+
 enum ThemeMode: String, CaseIterable, Identifiable {
     case system
     case light
@@ -68,7 +77,7 @@ enum ThemePreset: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .codex:
-            return "Default"
+            return "暖阳"
         case .github:
             return "GitHub"
         case .xcode:
@@ -81,7 +90,7 @@ enum ThemePreset: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .codex:
-            return "暖白工作界面配紫色消息，适合长时间对话"
+            return "中性暖白配单一深紫主色，克制但不沉闷"
         case .github:
             return "接近 GitHub Primer 的代码审阅配色"
         case .xcode:
@@ -94,8 +103,7 @@ enum ThemePreset: String, CaseIterable, Identifiable {
     var swatchForeground: Color {
         switch self {
         case .codex:
-            // Default 的主视觉只让用户消息保持 Slack aubergine，设置页色卡也跟随这个重点色。
-            return Color(red: 0.29, green: 0.08, blue: 0.29)
+            return .mimiPrimary
         case .github:
             return Color(red: 0.03, green: 0.41, blue: 0.85)
         case .xcode:
@@ -108,7 +116,7 @@ enum ThemePreset: String, CaseIterable, Identifiable {
     var swatchBackground: Color {
         switch self {
         case .codex:
-            return Color(red: 0.988, green: 0.984, blue: 0.973)
+            return Color(red: 0.976, green: 0.973, blue: 0.961)
         case .github:
             return Color(red: 0.96, green: 0.97, blue: 0.98)
         case .xcode:
@@ -201,45 +209,96 @@ struct ThemeTokens {
 
 extension ThemeTokens {
     var sidebarBackground: Color {
-        guard preset == .codex, resolvedScheme == .light else {
+        guard preset == .codex else {
             return background
         }
-        return Color(red: 0.969, green: 0.965, blue: 0.949)
+        switch resolvedScheme {
+        case .light:
+            return Color(red: 0.976, green: 0.973, blue: 0.961)
+        case .dark:
+            return Color(red: 0.129, green: 0.114, blue: 0.106)
+        }
     }
 
     var sidebarHoverFill: Color {
-        guard preset == .codex, resolvedScheme == .light else {
+        guard preset == .codex else {
             return elevatedSurface
         }
-        return Color(red: 0.953, green: 0.949, blue: 0.933)
+        switch resolvedScheme {
+        case .light:
+            return Color(red: 0.941, green: 0.937, blue: 0.929)
+        case .dark:
+            return Color(red: 0.188, green: 0.157, blue: 0.137)
+        }
     }
 
     var inputBackground: Color {
-        guard preset == .codex, resolvedScheme == .light else {
+        guard preset == .codex else {
             return elevatedSurface
         }
-        return Color(red: 0.961, green: 0.957, blue: 0.945)
+        switch resolvedScheme {
+        case .light:
+            return .white
+        case .dark:
+            return Color(red: 0.157, green: 0.129, blue: 0.118)
+        }
     }
 
     var planCardBackground: Color {
-        guard preset == .codex, resolvedScheme == .light else {
+        guard preset == .codex else {
             return elevatedSurface
         }
-        return Color(red: 1.000, green: 0.973, blue: 0.918)
+        switch resolvedScheme {
+        case .light:
+            return .white
+        case .dark:
+            return Color(red: 0.200, green: 0.161, blue: 0.114)
+        }
     }
 
     var planCardBorder: Color {
-        guard preset == .codex, resolvedScheme == .light else {
+        guard preset == .codex else {
             return border
         }
-        return Color(red: 0.914, green: 0.867, blue: 0.780)
+        switch resolvedScheme {
+        case .light:
+            return Color(red: 0.902, green: 0.890, blue: 0.878)
+        case .dark:
+            return Color(red: 0.431, green: 0.345, blue: 0.204)
+        }
+    }
+
+    /// 主操作继续使用产品默认紫色；暖珊瑚只作为装饰和次级提示，避免主按钮随主题改版失去识别度。
+    var primaryAction: Color {
+        guard preset == .codex else { return accent }
+        return .mimiPrimary
+    }
+
+    var livelyAccent: Color {
+        guard preset == .codex else { return accent }
+        return primaryAction
+    }
+
+    var accentSoft: Color {
+        guard preset == .codex else { return accent.opacity(0.12) }
+        switch resolvedScheme {
+        case .light:
+            return Color(red: 0.949, green: 0.933, blue: 0.945)
+        case .dark:
+            return Color(red: 0.243, green: 0.145, blue: 0.235)
+        }
+    }
+
+    var userBubbleForeground: Color {
+        guard preset == .codex else { return primaryText }
+        return Color(red: 0.984, green: 0.957, blue: 0.984)
     }
 
     func tint(for tone: AgentSessionStatusTone) -> Color {
         switch tone {
         case .active:
-            // 运行态使用主题内的成功/活动色，避免 Default 紫色界面跳出系统绿。
-            return success
+            // 运行态是产品主操作的延续，Default 主题统一使用 #4A144A；真正完成/成功仍使用 success。
+            return primaryAction
         case .warning:
             return warning
         case .danger:
@@ -428,64 +487,64 @@ final class ThemeStore: ObservableObject {
     }
 
     private var codexLightTokens: ThemeTokens {
-        // Default 主题面向长时间工作台：暖白/中性灰做底，只把品牌紫用于用户气泡和必要操作点缀。
+        // 参考系统设置页：中性暖白、白色卡片和单一深紫；层级依靠留白与明度，不铺彩色底。
         ThemeTokens(
             preset: .codex,
             resolvedScheme: .light,
-            background: Color(red: 0.988, green: 0.984, blue: 0.973),
+            background: Color(red: 0.976, green: 0.973, blue: 0.961),
             surface: Color(red: 1.00, green: 1.00, blue: 1.00),
-            elevatedSurface: Color(red: 0.961, green: 0.957, blue: 0.945),
-            userBubble: Color(red: 0.29, green: 0.08, blue: 0.29),
+            elevatedSurface: Color(red: 0.957, green: 0.953, blue: 0.941),
+            userBubble: .mimiPrimary,
             assistantBubble: .white,
-            systemBubble: Color(red: 0.953, green: 0.949, blue: 0.933),
-            codeBlock: Color(red: 0.10, green: 0.11, blue: 0.13),
-            codeText: Color(red: 0.94, green: 0.96, blue: 0.98),
-            primaryText: Color(red: 0.12, green: 0.11, blue: 0.10),
-            secondaryText: Color(red: 0.431, green: 0.416, blue: 0.388),
-            tertiaryText: Color(red: 0.604, green: 0.580, blue: 0.545),
-            accent: Color(red: 0.29, green: 0.08, blue: 0.29),
-            warning: Color(red: 0.84, green: 0.43, blue: 0.05),
-            success: Color(red: 0.14, green: 0.50, blue: 0.32),
-            goalActive: Color(red: 0.29, green: 0.08, blue: 0.29),
-            voiceRecording: Color(red: 0.29, green: 0.08, blue: 0.29),
+            systemBubble: Color(red: 0.953, green: 0.949, blue: 0.941),
+            codeBlock: Color(red: 0.141, green: 0.125, blue: 0.122),
+            codeText: Color(red: 1.000, green: 0.969, blue: 0.941),
+            primaryText: Color(red: 0.169, green: 0.141, blue: 0.129),
+            secondaryText: Color(red: 0.557, green: 0.557, blue: 0.576),
+            tertiaryText: Color(red: 0.635, green: 0.635, blue: 0.651),
+            accent: .mimiPrimary,
+            warning: Color(red: 0.663, green: 0.376, blue: 0.000),
+            success: Color(red: 0.184, green: 0.490, blue: 0.353),
+            goalActive: .mimiPrimary,
+            voiceRecording: .mimiPrimary,
             voiceWaveformGradient: [
-                Color(red: 0.29, green: 0.08, blue: 0.29),
-                Color(red: 0.56, green: 0.29, blue: 0.54),
-                Color(red: 0.78, green: 0.66, blue: 0.76),
+                .mimiPrimary,
+                Color(red: 0.478, green: 0.259, blue: 0.467),
+                Color(red: 0.690, green: 0.525, blue: 0.678),
             ],
-            border: Color(red: 0.906, green: 0.894, blue: 0.867),
-            selectionFill: Color(red: 0.925, green: 0.918, blue: 0.894)
+            border: Color(red: 0.898, green: 0.886, blue: 0.875),
+            selectionFill: Color(red: 0.937, green: 0.925, blue: 0.929)
         )
     }
 
     private var codexDarkTokens: ThemeTokens {
-        // 深色同样避免紫色铺底，保留石墨色层级，降低侧栏和工具栏的整体噪声。
+        // 深色改为暖石墨而非纯黑，状态色和桃色反射负责提亮，主操作仍保持默认紫色。
         ThemeTokens(
             preset: .codex,
             resolvedScheme: .dark,
-            background: Color(red: 0.07, green: 0.08, blue: 0.09),
-            surface: Color(red: 0.11, green: 0.12, blue: 0.14),
-            elevatedSurface: Color(red: 0.16, green: 0.17, blue: 0.19),
-            userBubble: Color(red: 0.29, green: 0.08, blue: 0.29),
-            assistantBubble: Color(red: 0.11, green: 0.12, blue: 0.14),
-            systemBubble: Color(red: 0.15, green: 0.16, blue: 0.18),
-            codeBlock: Color(red: 0.04, green: 0.04, blue: 0.05),
-            codeText: Color(red: 0.91, green: 0.92, blue: 0.94),
-            primaryText: Color(red: 0.93, green: 0.94, blue: 0.96),
-            secondaryText: Color(red: 0.72, green: 0.74, blue: 0.78),
-            tertiaryText: Color(red: 0.52, green: 0.55, blue: 0.60),
+            background: Color(red: 0.098, green: 0.086, blue: 0.078),
+            surface: Color(red: 0.129, green: 0.114, blue: 0.106),
+            elevatedSurface: Color(red: 0.169, green: 0.145, blue: 0.133),
+            userBubble: .mimiPrimary,
+            assistantBubble: Color(red: 0.129, green: 0.114, blue: 0.106),
+            systemBubble: Color(red: 0.176, green: 0.161, blue: 0.157),
+            codeBlock: Color(red: 0.047, green: 0.039, blue: 0.035),
+            codeText: Color(red: 1.000, green: 0.969, blue: 0.941),
+            primaryText: Color(red: 1.000, green: 0.969, blue: 0.941),
+            secondaryText: Color(red: 0.827, green: 0.749, blue: 0.706),
+            tertiaryText: Color(red: 0.631, green: 0.525, blue: 0.467),
             accent: Color(red: 0.82, green: 0.70, blue: 0.94),
-            warning: Color(red: 0.95, green: 0.61, blue: 0.18),
-            success: Color(red: 0.32, green: 0.72, blue: 0.48),
-            goalActive: Color(red: 0.82, green: 0.70, blue: 0.94),
-            voiceRecording: Color(red: 0.82, green: 0.70, blue: 0.94),
+            warning: Color(red: 0.941, green: 0.702, blue: 0.361),
+            success: Color(red: 0.384, green: 0.769, blue: 0.576),
+            goalActive: Color(red: 0.851, green: 0.604, blue: 0.718),
+            voiceRecording: .mimiPrimary,
             voiceWaveformGradient: [
-                Color(red: 0.56, green: 0.29, blue: 0.54),
-                Color(red: 0.82, green: 0.70, blue: 0.94),
-                Color(red: 0.93, green: 0.82, blue: 0.98)
+                .mimiPrimary,
+                Color(red: 0.478, green: 0.259, blue: 0.467),
+                Color(red: 0.690, green: 0.525, blue: 0.678)
             ],
-            border: Color(red: 0.25, green: 0.27, blue: 0.31),
-            selectionFill: Color(red: 0.19, green: 0.20, blue: 0.23)
+            border: Color(red: 0.227, green: 0.196, blue: 0.220),
+            selectionFill: Color(red: 0.184, green: 0.125, blue: 0.176)
         )
     }
 

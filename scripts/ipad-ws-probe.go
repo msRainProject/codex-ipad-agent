@@ -112,6 +112,8 @@ type workerResult struct {
 	CompletedMS        int64         `json:"completed_ms,omitempty"`
 	EventCount         int           `json:"event_count"`
 	DeltaCount         int           `json:"delta_count"`
+	AssistantTextBytes int           `json:"assistant_text_bytes"`
+	EventMethods       []string      `json:"event_methods,omitempty"`
 	Error              string        `json:"error,omitempty"`
 	Duration           time.Duration `json:"-"`
 }
@@ -400,12 +402,15 @@ func runWorker(ctx context.Context, worker int, wsURL string, token string, p pr
 	// turn/start 只代表 app-server 接受了回合；这里继续监听事件，统计首包/首 delta/完成耗时。
 	listenCtx, cancel := context.WithTimeout(ctx, listenAfterTurn)
 	defer cancel()
+	hasAssistantOutput := false
 	for {
 		select {
 		case <-listenCtx.Done():
 			result.Duration = time.Since(started)
 			if result.EventCount == 0 {
 				result.Error = "turn/start 已接受，但监听窗口内没有收到任何事件"
+			} else if !hasAssistantOutput {
+				result.Error = "收到运行时事件，但没有收到非空 assistant 回复"
 			}
 			return result
 		case <-client.closed:
@@ -421,8 +426,19 @@ func runWorker(ctx context.Context, worker int, wsURL string, token string, p pr
 				continue
 			}
 			result.EventCount++
+			result.EventMethods = appendUnique(result.EventMethods, event.Method)
 			if result.FirstEventMS == 0 {
 				result.FirstEventMS = elapsedMS(turnStart)
+			}
+			assistantText, eventFailure := probeEventObservation(event)
+			if assistantText != "" {
+				hasAssistantOutput = true
+				result.AssistantTextBytes += len([]byte(assistantText))
+			}
+			if eventFailure != "" {
+				result.Duration = time.Since(started)
+				result.Error = eventFailure
+				return result
 			}
 			if strings.Contains(event.Method, "delta") {
 				result.DeltaCount++
@@ -433,6 +449,7 @@ func runWorker(ctx context.Context, worker int, wsURL string, token string, p pr
 			if event.Method == "turn/completed" {
 				result.CompletedMS = elapsedMS(turnStart)
 				result.Duration = time.Since(started)
+				result.Error = completedTurnFailure(hasAssistantOutput, event)
 				return result
 			}
 			if event.Method == "turn/failed" || event.Method == "thread/closed" {
@@ -442,6 +459,72 @@ func runWorker(ctx context.Context, worker int, wsURL string, token string, p pr
 			}
 		}
 	}
+}
+
+// probeEventObservation 同时提取有效回复和运行时错误。不能只看 turn/completed：
+// Claude CLI 鉴权失败时也可能正常结束协议回合，但 item 本身明确标记为 API 错误。
+func probeEventObservation(event rpcFrame) (assistantText string, failure string) {
+	switch event.Method {
+	case "item/agentMessage/delta":
+		assistantText = firstString(event.Params, "delta", "text")
+	case "item/completed":
+		if item, ok := event.Params["item"].(map[string]any); ok && firstString(item, "type") == "agentMessage" {
+			assistantText = firstString(item, "text", "content")
+		}
+	case "error", "turn/failed":
+		return assistantText, "received " + event.Method + ": " + eventFailureDetail(event.Params)
+	}
+
+	raw, _ := json.Marshal(event.Params)
+	lower := strings.ToLower(string(raw))
+	if strings.Contains(lower, `"isapierrormessage":true`) ||
+		strings.Contains(lower, "authentication_failed") ||
+		strings.Contains(lower, "invalid authentication credentials") ||
+		strings.Contains(lower, "failed to authenticate") {
+		return assistantText, "runtime error: " + eventFailureDetail(event.Params)
+	}
+	return assistantText, ""
+}
+
+func completedTurnFailure(hasAssistantOutput bool, event rpcFrame) string {
+	turn := event.Params
+	if nested, ok := event.Params["turn"].(map[string]any); ok {
+		turn = nested
+	}
+	status := strings.ToLower(firstString(turn, "status", "state"))
+	if status != "" && status != "completed" {
+		return "turn completed with status=" + status + ": " + eventFailureDetail(turn)
+	}
+	if !hasAssistantOutput {
+		return "turn/completed 但没有收到非空 assistant 回复"
+	}
+	return ""
+}
+
+func eventFailureDetail(params map[string]any) string {
+	if nested, ok := params["error"].(map[string]any); ok {
+		if detail := firstString(nested, "message", "code", "type"); detail != "" {
+			return detail
+		}
+	}
+	if item, ok := params["item"].(map[string]any); ok {
+		if detail := firstString(item, "text", "message", "error"); detail != "" {
+			return detail
+		}
+	}
+	if detail := firstString(params, "message", "error", "code"); detail != "" {
+		return detail
+	}
+	return "unknown runtime failure"
+}
+
+func appendUnique(values []string, value string) []string {
+	for _, current := range values {
+		if current == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 func listThreads(ctx context.Context, wsURL string, token string, p project, listLimit int, useStateDBOnly bool, timeout time.Duration) ([]listedThread, error) {

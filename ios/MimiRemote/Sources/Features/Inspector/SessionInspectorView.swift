@@ -4,7 +4,7 @@ struct SessionInspectorView: View {
     @EnvironmentObject private var sessionStore: SessionStore
     @EnvironmentObject private var themeStore: ThemeStore
     @Environment(\.colorScheme) private var colorScheme
-    @State private var selectedSection: SessionInspectorSection = .context
+    @State private var selectedSection: SessionInspectorSection = .overview
 
     var body: some View {
         let tokens = themeStore.tokens(for: colorScheme)
@@ -30,14 +30,13 @@ struct SessionInspectorView: View {
 
             Group {
                 switch selectedSection {
-                case .context:
+                case .overview:
                     SessionContextSidebarView()
-                case .activity:
-                    RuntimeActivityPanelView()
-                case .diff:
+                case .changes:
                     DiffPanelView()
-                case .approval:
-                    ApprovalCardView()
+                case .activity:
+                    // 审批/补充输入历史也是运行活动的一部分；待处理卡仍直接显示在 Composer。
+                    RuntimeActivityPanelView()
                 }
             }
         }
@@ -95,36 +94,31 @@ struct SessionInspectorView: View {
 }
 
 private enum SessionInspectorSection: String, CaseIterable, Identifiable {
-    case context
+    case overview
+    case changes
     case activity
-    case diff
-    case approval
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .context:
+        case .overview:
             return "概览"
+        case .changes:
+            return "变更"
         case .activity:
             return "活动"
-        case .diff:
-            return "Git"
-        case .approval:
-            return "审批"
         }
     }
 
     var symbolName: String {
         switch self {
-        case .context:
+        case .overview:
             return "sidebar.right"
+        case .changes:
+            return "doc.text.magnifyingglass"
         case .activity:
             return "list.bullet.rectangle"
-        case .diff:
-            return "doc.text.magnifyingglass"
-        case .approval:
-            return "checkmark.seal"
         }
     }
 }

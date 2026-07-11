@@ -1,5 +1,43 @@
 import SwiftUI
 
+enum WorkspaceSessionRuntimeChoice: String, CaseIterable, Identifiable {
+    case codex
+    case claude
+
+    var id: String { rawValue }
+
+    var runtimeProvider: String? {
+        switch self {
+        case .codex:
+            return nil
+        case .claude:
+            return "claude"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .codex:
+            return "新建 Codex 会话"
+        case .claude:
+            return "新建 Claude Code 会话"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .codex:
+            return "plus.circle"
+        case .claude:
+            return "sparkles"
+        }
+    }
+
+    static func available(claudeChannelAvailable: Bool) -> [Self] {
+        claudeChannelAvailable ? [.codex, .claude] : [.codex]
+    }
+}
+
 /// 工作区只维护本地浏览选择。只有用户明确进入会话或新建会话时，才交给 SessionStore 改变活动上下文。
 struct WorkspaceRootView: View {
     @EnvironmentObject private var sessionStore: SessionStore
@@ -7,15 +45,16 @@ struct WorkspaceRootView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     let onOpenInSessions: (AgentProject) -> Void
-    let onStartSession: (AgentProject) -> Void
+    let onStartSession: (AgentProject, WorkspaceSessionRuntimeChoice) -> Void
 
     @State private var selectedWorkspaceID: String?
     @State private var catalogState: CatalogState = .idle
     @State private var isPresentingOpenWorkspace = false
+    @State private var presentedProject: AgentProject?
 
     init(
         onOpenInSessions: @escaping (AgentProject) -> Void,
-        onStartSession: @escaping (AgentProject) -> Void
+        onStartSession: @escaping (AgentProject, WorkspaceSessionRuntimeChoice) -> Void
     ) {
         self.onOpenInSessions = onOpenInSessions
         self.onStartSession = onStartSession
@@ -24,9 +63,10 @@ struct WorkspaceRootView: View {
     var body: some View {
         let tokens = themeStore.tokens(for: colorScheme)
 
-        NavigationSplitView {
-            workspaceList(tokens: tokens)
+        NavigationStack {
+            workspaceGrid(tokens: tokens)
                 .navigationTitle("工作区")
+                .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
@@ -34,12 +74,11 @@ struct WorkspaceRootView: View {
                         } label: {
                             Label("打开目录", systemImage: "folder.badge.plus")
                         }
+                        .buttonStyle(.glassProminent)
+                        .tint(tokens.primaryAction)
                     }
                 }
-        } detail: {
-            workspaceDetail(tokens: tokens)
         }
-        .navigationSplitViewStyle(.balanced)
         .task {
             synchronizeSelection()
             if sessionStore.sidebarProjects.isEmpty && !sessionStore.isLoading {
@@ -57,95 +96,102 @@ struct WorkspaceRootView: View {
         .sheet(isPresented: $isPresentingOpenWorkspace) {
             OpenWorkspaceSheet()
         }
+        .sheet(item: $presentedProject) { project in
+            NavigationStack {
+                workspaceDetailForm(project: project)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("完成") { presentedProject = nil }
+                        }
+                    }
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
         .background(tokens.background.ignoresSafeArea())
     }
 
-    private func workspaceList(tokens: ThemeTokens) -> some View {
-        List(selection: $selectedWorkspaceID) {
-            if catalogState == .loading && sessionStore.sidebarProjects.isEmpty {
-                Section {
+    private func workspaceGrid(tokens: ThemeTokens) -> some View {
+        ScrollView {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 260, maximum: 360), spacing: 14)],
+                alignment: .center,
+                spacing: 14
+            ) {
+                if catalogState == .loading && sessionStore.sidebarProjects.isEmpty {
                     ForEach(0..<4, id: \.self) { _ in
-                        Label("正在加载工作区", systemImage: "folder")
-                            .redacted(reason: .placeholder)
+                        WorkspaceLibraryCard(
+                            project: AgentProject(id: UUID().uuidString, name: "正在加载工作区", path: "/Users/you/code/project"),
+                            sessionCount: 0,
+                            worktreeCount: 0,
+                            isUnavailable: false,
+                            tokens: tokens
+                        ) {}
+                        .redacted(reason: .placeholder)
                     }
-                }
-            } else {
-                Section {
+                } else {
                     ForEach(sessionStore.sidebarProjects) { project in
-                        Label {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(project.name)
-                                Text(project.path)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                        } icon: {
-                            Image(systemName: sessionStore.isWorkspaceUnavailable(project.id) ? "folder.badge.questionmark" : "folder")
-                                .foregroundStyle(sessionStore.isWorkspaceUnavailable(project.id) ? tokens.warning : tokens.accent)
+                        WorkspaceLibraryCard(
+                            project: project,
+                            sessionCount: sessionStore.sessions(forProjectID: project.id).count,
+                            worktreeCount: sessionStore.managedWorktrees(rootProjectID: sessionStore.rootProjectID(forProjectID: project.id)).count,
+                            isUnavailable: sessionStore.isWorkspaceUnavailable(project.id),
+                            tokens: tokens
+                        ) {
+                            selectedWorkspaceID = project.id
+                            presentedProject = project
                         }
-                        .tag(project.id)
-                        .accessibilityLabel("工作区 \(project.name)")
                     }
-                } header: {
-                    Text("最近工作区")
                 }
             }
+            .padding(.horizontal, 24)
+            .padding(.top, 22)
+            .padding(.bottom, 30)
+            .frame(maxWidth: 960)
+            .frame(maxWidth: .infinity)
         }
-        .listStyle(.sidebar)
+        .background(tokens.background.ignoresSafeArea())
         .refreshable {
             await refreshCatalog()
         }
         .overlay {
-            if case .failed(let message) = catalogState, sessionStore.sidebarProjects.isEmpty {
+            if sessionStore.sidebarProjects.isEmpty, catalogState != .loading {
                 ContentUnavailableView {
-                    Label("无法加载工作区", systemImage: "exclamationmark.triangle")
+                    Label(emptyWorkspaceTitle, systemImage: emptyWorkspaceSymbol)
                 } description: {
-                    Text(message)
+                    Text(emptyWorkspaceMessage)
                 } actions: {
-                    Button("重试") {
-                        Task { await refreshCatalog() }
+                    Button("打开目录") {
+                        isPresentingOpenWorkspace = true
                     }
+                    .buttonStyle(.borderedProminent)
+                    .tint(tokens.primaryAction)
                 }
             }
         }
     }
 
-    @ViewBuilder
-    private func workspaceDetail(tokens: ThemeTokens) -> some View {
-        if let project = selectedProject {
-            WorkspaceDetailForm(
-                project: project,
-                sessionCount: sessionStore.sessions(forProjectID: project.id).count,
-                worktreeCount: sessionStore.managedWorktrees(rootProjectID: sessionStore.rootProjectID(forProjectID: project.id)).count,
-                isUnavailable: sessionStore.isWorkspaceUnavailable(project.id),
-                lastActivity: lastActivityText(for: project),
-                isShownInSessions: sessionStore.isWorkspaceShownInSessions(project.id),
-                onToggleSessionVisibility: {
-                    sessionStore.toggleWorkspaceInSessions(project)
-                },
-                onOpenInSessions: {
-                    onOpenInSessions(project)
-                },
-                onStartSession: {
-                    onStartSession(project)
-                }
-            )
-        } else if catalogState == .loading {
-            ProgressView("正在加载工作区")
-        } else if sessionStore.sidebarProjects.isEmpty {
-            ContentUnavailableView {
-                Label("还没有工作区", systemImage: "folder.badge.plus")
-            } description: {
-                Text("打开目录后，可以在这里浏览项目和创建会话。")
-            } actions: {
-                Button("打开目录") {
-                    isPresentingOpenWorkspace = true
-                }
+    private func workspaceDetailForm(project: AgentProject) -> some View {
+        WorkspaceDetailForm(
+            project: project,
+            sessionCount: sessionStore.sessions(forProjectID: project.id).count,
+            worktreeCount: sessionStore.managedWorktrees(rootProjectID: sessionStore.rootProjectID(forProjectID: project.id)).count,
+            isUnavailable: sessionStore.isWorkspaceUnavailable(project.id),
+            lastActivity: lastActivityText(for: project),
+            isShownInSessions: sessionStore.isWorkspaceShownInSessions(project.id),
+            claudeChannelAvailable: sessionStore.hasClaudeRuntimeChannel,
+            onToggleSessionVisibility: {
+                sessionStore.toggleWorkspaceInSessions(project)
+            },
+            onOpenInSessions: {
+                presentedProject = nil
+                onOpenInSessions(project)
+            },
+            onStartSession: { runtimeChoice in
+                presentedProject = nil
+                onStartSession(project, runtimeChoice)
             }
-        } else {
-            ContentUnavailableView("选择一个工作区", systemImage: "folder")
-        }
+        )
     }
 
     private var selectedProject: AgentProject? {
@@ -153,6 +199,21 @@ struct WorkspaceRootView: View {
             return nil
         }
         return sessionStore.sidebarProjects.first { $0.id == selectedWorkspaceID }
+    }
+
+    private var emptyWorkspaceTitle: String {
+        if case .failed = catalogState { return "无法加载工作区" }
+        return "还没有工作区"
+    }
+
+    private var emptyWorkspaceSymbol: String {
+        if case .failed = catalogState { return "exclamationmark.triangle" }
+        return "folder.badge.plus"
+    }
+
+    private var emptyWorkspaceMessage: String {
+        if case .failed(let message) = catalogState { return message }
+        return "打开目录后，可以在这里浏览项目和创建会话。"
     }
 
     private func synchronizeSelection() {
@@ -209,6 +270,75 @@ struct WorkspaceRootView: View {
     }
 }
 
+private struct WorkspaceLibraryCard: View {
+    @EnvironmentObject private var themeStore: ThemeStore
+    let project: AgentProject
+    let sessionCount: Int
+    let worktreeCount: Int
+    let isUnavailable: Bool
+    let tokens: ThemeTokens
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: isUnavailable ? "folder.badge.questionmark" : "folder.fill")
+                        .font(themeStore.uiFont(size: 22, weight: .semibold))
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(isUnavailable ? tokens.warning : tokens.primaryAction)
+                        .frame(width: 44, height: 44)
+                        .background((isUnavailable ? tokens.warning : tokens.livelyAccent).opacity(0.13), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(project.name)
+                            .font(themeStore.uiFont(.headline, weight: .semibold))
+                            .foregroundStyle(tokens.primaryText)
+                            .lineLimit(1)
+                        Text(project.path)
+                            .font(themeStore.uiFont(.caption))
+                            .foregroundStyle(tokens.secondaryText)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right")
+                        .font(themeStore.uiFont(.caption, weight: .semibold))
+                        .foregroundStyle(tokens.tertiaryText)
+                }
+
+                HStack(spacing: 8) {
+                    metric("\(sessionCount)", title: "会话", systemImage: "bubble.left.and.bubble.right")
+                    metric("\(worktreeCount)", title: "Worktree", systemImage: "arrow.triangle.branch")
+                    Spacer(minLength: 0)
+                    Label(isUnavailable ? "需要重试" : "可访问", systemImage: isUnavailable ? "exclamationmark.triangle" : "checkmark.circle.fill")
+                        .font(themeStore.uiFont(.caption, weight: .semibold))
+                        .foregroundStyle(isUnavailable ? tokens.warning : tokens.success)
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, minHeight: 142, alignment: .topLeading)
+            .background(tokens.surface.opacity(0.72), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(tokens.border.opacity(0.72), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("工作区 \(project.name)，\(sessionCount) 个会话")
+    }
+
+    private func metric(_ value: String, title: String, systemImage: String) -> some View {
+        Label("\(value) \(title)", systemImage: systemImage)
+            .font(themeStore.uiFont(.caption, weight: .medium))
+            .foregroundStyle(tokens.secondaryText)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(tokens.elevatedSurface.opacity(0.66), in: Capsule())
+    }
+}
+
 private struct WorkspaceDetailForm: View {
     let project: AgentProject
     let sessionCount: Int
@@ -216,9 +346,10 @@ private struct WorkspaceDetailForm: View {
     let isUnavailable: Bool
     let lastActivity: String
     let isShownInSessions: Bool
+    let claudeChannelAvailable: Bool
     let onToggleSessionVisibility: () -> Void
     let onOpenInSessions: () -> Void
-    let onStartSession: () -> Void
+    let onStartSession: (WorkspaceSessionRuntimeChoice) -> Void
 
     var body: some View {
         Form {
@@ -240,8 +371,14 @@ private struct WorkspaceDetailForm: View {
 
             Section("会话") {
                 Button("在会话中打开", action: onOpenInSessions)
-                Button("新建会话", action: onStartSession)
-                    .buttonStyle(.borderedProminent)
+                ForEach(WorkspaceSessionRuntimeChoice.available(claudeChannelAvailable: claudeChannelAvailable)) { choice in
+                    Button {
+                        // thread 创建时就绑定 runtime；这里必须把用户选择一路传到 SessionStore。
+                        onStartSession(choice)
+                    } label: {
+                        Label(choice.title, systemImage: choice.systemImage)
+                    }
+                }
                 Button(isShownInSessions ? "从会话侧栏隐藏" : "显示在会话侧栏", action: onToggleSessionVisibility)
             }
         }

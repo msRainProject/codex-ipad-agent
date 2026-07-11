@@ -155,22 +155,24 @@ final class ThemeStoreTests: XCTestCase {
         let darkSuccess = rgba(darkTokens.success)
         let darkUserBubble = rgba(darkTokens.userBubble)
 
-        XCTAssertEqual(ThemePreset.codex.subtitle, "暖白工作界面配紫色消息，适合长时间对话")
+        XCTAssertEqual(ThemePreset.codex.title, "暖阳")
+        XCTAssertEqual(ThemePreset.codex.subtitle, "中性暖白配单一深紫主色，克制但不沉闷")
 
-        assertRGB(lightBackground, red: 252, green: 251, blue: 248)
-        assertRGB(lightSidebarBackground, red: 247, green: 246, blue: 242)
-        assertRGB(lightSelectionFill, red: 236, green: 234, blue: 228)
-        assertRGB(lightSidebarHoverFill, red: 243, green: 242, blue: 238)
-        assertRGB(lightInputBackground, red: 245, green: 244, blue: 241)
-        assertRGB(lightPlanCardBackground, red: 255, green: 248, blue: 234)
-        assertRGB(lightPlanCardBorder, red: 233, green: 221, blue: 199)
-        assertRGB(lightBorder, red: 231, green: 228, blue: 221)
-        assertRGB(lightSecondaryText, red: 110, green: 106, blue: 99)
+        assertRGB(lightBackground, red: 249, green: 248, blue: 245)
+        assertRGB(lightSidebarBackground, red: 249, green: 248, blue: 245)
+        assertRGB(lightSelectionFill, red: 239, green: 236, blue: 237)
+        assertRGB(lightSidebarHoverFill, red: 240, green: 239, blue: 237)
+        assertRGB(lightInputBackground, red: 255, green: 255, blue: 255)
+        assertRGB(lightPlanCardBackground, red: 255, green: 255, blue: 255)
+        assertRGB(lightPlanCardBorder, red: 230, green: 227, blue: 224)
+        assertRGB(lightBorder, red: 229, green: 226, blue: 223)
+        assertRGB(lightSecondaryText, red: 142, green: 142, blue: 147)
         XCTAssertGreaterThan(lightSurface.red, 0.99)
         XCTAssertGreaterThan(lightSurface.green, 0.99)
         XCTAssertGreaterThan(lightSurface.blue, 0.99)
         XCTAssertEqual(lightTokens.assistantBubble, .white)
-        XCTAssertLessThan(abs(lightElevatedSurface.red - lightElevatedSurface.blue), 0.03)
+        XCTAssertGreaterThan(lightElevatedSurface.red, lightElevatedSurface.blue)
+        XCTAssertLessThan(abs(lightElevatedSurface.red - lightElevatedSurface.blue), 0.12)
 
         XCTAssertEqual(lightAccent.red, lightUserBubble.red, accuracy: 0.001)
         XCTAssertEqual(lightAccent.green, lightUserBubble.green, accuracy: 0.001)
@@ -181,10 +183,10 @@ final class ThemeStoreTests: XCTestCase {
         XCTAssertGreaterThan(lightSuccess.green, lightSuccess.red)
         XCTAssertGreaterThan(lightSuccess.green, lightSuccess.blue)
 
-        // 用户发送气泡使用 Slack Aubergine (#4A154B)；其它操作只做少量同色点缀，不再引入蓝色体系。
-        XCTAssertEqual(lightUserBubble.red, 0.29, accuracy: 0.01)
-        XCTAssertEqual(lightUserBubble.green, 0.08, accuracy: 0.01)
-        XCTAssertEqual(lightUserBubble.blue, 0.29, accuracy: 0.01)
+        // 主操作和用户发送气泡严格共用产品默认色 #4A144A。
+        assertRGB(lightUserBubble, red: 74, green: 20, blue: 74)
+        assertRGB(rgba(lightTokens.primaryAction), red: 74, green: 20, blue: 74)
+        assertRGB(rgba(darkTokens.primaryAction), red: 74, green: 20, blue: 74)
         XCTAssertGreaterThan(lightUserBubble.alpha, 0.99)
         XCTAssertEqual(codexSwatchForeground.red, lightUserBubble.red, accuracy: 0.001)
         XCTAssertEqual(codexSwatchForeground.green, lightUserBubble.green, accuracy: 0.001)
@@ -203,9 +205,7 @@ final class ThemeStoreTests: XCTestCase {
         XCTAssertGreaterThan(darkSuccess.green, darkSuccess.red)
         XCTAssertGreaterThan(darkSuccess.green, darkSuccess.blue)
 
-        XCTAssertEqual(darkUserBubble.red, 0.29, accuracy: 0.01)
-        XCTAssertEqual(darkUserBubble.green, 0.08, accuracy: 0.01)
-        XCTAssertEqual(darkUserBubble.blue, 0.29, accuracy: 0.01)
+        assertRGB(darkUserBubble, red: 74, green: 20, blue: 74)
         XCTAssertGreaterThan(darkUserBubble.alpha, 0.99)
     }
 
@@ -267,6 +267,12 @@ final class ThemeStoreTests: XCTestCase {
                 let voice = rgba(tokens.voiceRecording)
                 let accent = rgba(tokens.accent)
                 let warning = rgba(tokens.warning)
+
+                if preset == .codex {
+                    assertRGB(voice, red: 74, green: 20, blue: 74)
+                    assertRGB(rgba(tokens.tint(for: .active)), red: 74, green: 20, blue: 74)
+                    continue
+                }
 
                 // 语音录音态要保留“正在听”的差异感，但默认/代码主题里应贴近主色，而不是跳成警告色。
                 XCTAssertLessThan(

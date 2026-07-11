@@ -58,6 +58,9 @@ final class CodexAppServerProtocolTests: XCTestCase {
         XCTAssertFalse(SessionStore.isDeterministicGatewayPolicyFailure(
             "app-server 错误 -32080：gateway pending history 请求过多"
         ))
+        XCTAssertFalse(SessionStore.isDeterministicGatewayPolicyFailure(
+            "app-server 错误 -32080：thread/list 相同历史或列表请求仍在执行，请稍后重试"
+        ))
         // 非 -32080 的普通断线仍然自动重连。
         XCTAssertFalse(SessionStore.isDeterministicGatewayPolicyFailure("连接已断开"))
         XCTAssertFalse(SessionStore.isDeterministicGatewayPolicyFailure(

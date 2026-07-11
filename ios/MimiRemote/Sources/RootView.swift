@@ -11,6 +11,7 @@ struct RootView: View {
     @State private var showingLogInspector = false
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     @SceneStorage("root.selectedAppTab") private var selectedAppTabRawValue = AppTab.sessions.rawValue
+    @SceneStorage("root.lastSessionSnapshot") private var lastSessionSnapshot = ""
     @AppStorage("runtime.keepAwakeWhileRunning") private var keepAwakeWhileRunning = false
 
     var body: some View {
@@ -25,7 +26,7 @@ struct RootView: View {
             }
         }
         .task {
-            await sessionStore.bootstrap()
+            await sessionStore.bootstrap(restoring: decodedSessionRestoreSnapshot)
         }
         .task(id: scenePhase == .active ? sessionStore.selectedProjectID : nil) {
             guard scenePhase == .active else {
@@ -52,6 +53,13 @@ struct RootView: View {
         .onChange(of: sessionStore.selectedSessionID) { _, _ in
             applyIdleTimerPolicy()
         }
+        .onChange(of: sessionStore.selectedSession) { _, session in
+            guard let session else { return }
+            let snapshot = SessionRestoreSnapshot(endpoint: appStore.endpoint, session: session)
+            if let data = try? JSONEncoder().encode(snapshot) {
+                lastSessionSnapshot = data.base64EncodedString()
+            }
+        }
         .onChange(of: sessionStore.selectedSession?.status) { _, _ in
             applyIdleTimerPolicy()
         }
@@ -71,6 +79,11 @@ struct RootView: View {
             && sessionStore.selectedSession?.isRunning == true
     }
 
+    private var decodedSessionRestoreSnapshot: SessionRestoreSnapshot? {
+        guard let data = Data(base64Encoded: lastSessionSnapshot) else { return nil }
+        return try? JSONDecoder().decode(SessionRestoreSnapshot.self, from: data)
+    }
+
     private var selectedAppTab: AppTab {
         // v30 以前保存的“我的”入口并入设置，升级后不让用户落到不存在的 tab。
         if selectedAppTabRawValue == "profile" {
@@ -87,27 +100,7 @@ struct RootView: View {
     }
 
     private var appShell: some View {
-        let tokens = themeStore.tokens(for: colorScheme)
-
-        return TabView(selection: selectedAppTabBinding) {
-            ForEach(AppTab.allCases) { tab in
-                Tab(tab.title, systemImage: tab.systemImage, value: tab) {
-                    appTabContent(for: tab)
-                }
-                .customizationBehavior(.disabled, for: .sidebar, .tabBar)
-            }
-        }
-        // iPad 使用系统 Sidebar，窄窗和 iPhone 自动退回系统 Tab Bar；不再维护自绘导航轨。
-        .tabViewStyle(.sidebarAdaptable)
-        .defaultAdaptableTabBarPlacement(horizontalSizeClass == .regular ? .sidebar : .tabBar)
-        .toolbarBackground(tokens.background, for: .tabBar)
-        .toolbarBackground(.visible, for: .tabBar)
-        .onAppear {
-            if selectedAppTabRawValue == "profile" {
-                selectedAppTabRawValue = AppTab.settings.rawValue
-            }
-        }
-        .background(tokens.background.ignoresSafeArea())
+        UnifiedWorkbenchShell(showingInspector: $showingLogInspector)
     }
 
     @ViewBuilder
@@ -123,9 +116,10 @@ struct RootView: View {
                         selectedAppTabRawValue = AppTab.sessions.rawValue
                     }
                 },
-                onStartSession: { project in
+                onStartSession: { project, runtimeChoice in
                     Task {
-                        await sessionStore.startNewSession(in: project)
+                        // Workspace 新入口也必须保留 runtime 选择，否则 Claude 会话会静默落到 Codex gateway。
+                        await sessionStore.startNewSession(in: project, runtimeProvider: runtimeChoice.runtimeProvider)
                         selectedAppTabRawValue = AppTab.sessions.rawValue
                     }
                 }
@@ -216,6 +210,8 @@ struct RootView: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .navigationDestination(isPresented: compactSessionDetailBinding) {
                     workspaceDetail(layout: layout)
+                        // 手机详情页需要把纵向空间完整留给消息和输入区；返回列表后系统会自动恢复 Tab Bar。
+                        .toolbar(.hidden, for: .tabBar)
                 }
         }
         .themedWorkbenchNavigationChrome(tokens: tokens, colorScheme: themeStore.resolvedColorScheme(for: colorScheme))
@@ -2184,7 +2180,7 @@ private struct ProfileInfoRow: View {
     }
 }
 
-private extension View {
+extension View {
     func themedWorkbenchNavigationChrome(tokens: ThemeTokens, colorScheme: ColorScheme) -> some View {
         // 会话工作台嵌在 NavigationSplitView 里，系统导航栏默认会透出平台背景。
         // 这里统一让导航栏和状态栏区域吃主题色，避免 iPad 横屏顶部出现黑色断层。
@@ -2244,13 +2240,13 @@ struct WorkbenchLayout: Equatable {
     }
 }
 
-private extension View {
+extension View {
     func sessionInspectorPresentation(isPresented: Binding<Bool>, layout: WorkbenchLayout) -> some View {
         modifier(SessionInspectorPresentation(isPresented: isPresented, layout: layout))
     }
 }
 
-private struct SessionInspectorPresentation: ViewModifier {
+struct SessionInspectorPresentation: ViewModifier {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Binding var isPresented: Bool
     let layout: WorkbenchLayout

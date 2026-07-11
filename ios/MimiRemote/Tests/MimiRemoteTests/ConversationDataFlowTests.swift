@@ -862,6 +862,41 @@ final class ConversationDataFlowTests: XCTestCase {
         }
     }
 
+    func testEventReducerRoutesRuntimeErrorToOwningSessionAndMarksFailed() async throws {
+        let reducer = EventReducer()
+        let metadata = AgentEventMetadata(
+            seq: 45,
+            sessionID: "claude_thread",
+            turnID: "claude_turn",
+            itemID: nil,
+            messageID: nil,
+            clientMessageID: nil,
+            revision: nil,
+            createdAt: nil
+        )
+
+        let output = await reducer.reduce(
+            .error(
+                AgentErrorPayload(message: "Invalid authentication credentials", code: "authentication_failed", retryable: false),
+                metadata
+            ),
+            fallbackSessionID: "wrong_fallback",
+            outputIdleClearDelay: 80_000_000
+        )
+
+        XCTAssertEqual(output.statusUpdates.first?.0, "claude_thread")
+        XCTAssertEqual(output.statusUpdates.first?.1, SessionStatus.failed.rawValue)
+        XCTAssertEqual(output.foregroundClears, ["claude_thread"])
+        XCTAssertEqual(output.errorMessage, "Invalid authentication credentials")
+        if case .system(let text, let sessionID, let kind, _) = try XCTUnwrap(output.messageMutations.first) {
+            XCTAssertEqual(sessionID, "claude_thread")
+            XCTAssertEqual(kind, .error)
+            XCTAssertTrue(text.contains("Invalid authentication credentials"))
+        } else {
+            XCTFail("Expected runtime error system message")
+        }
+    }
+
     func testLargeDiffPanelItemsDeduplicateAndCollapseTail() throws {
         let old = ConversationMessage(
             role: .system,
@@ -4312,7 +4347,8 @@ final class ConversationDataFlowTests: XCTestCase {
             status: "history",
             source: "codex",
             resumeID: "review",
-            preview: "替换 App Store 高风险描述"
+            preview: "替换 App Store 高风险描述",
+            updatedAt: Date(timeIntervalSince1970: 10)
         )
         let featureAudit = makeSession(
             id: "codex_feature_audit",
@@ -4320,7 +4356,8 @@ final class ConversationDataFlowTests: XCTestCase {
             title: "功能对齐检查",
             status: "history",
             source: "codex",
-            resumeID: "feature"
+            resumeID: "feature",
+            updatedAt: Date(timeIntervalSince1970: 20)
         )
         let client = MockSessionStoreClient(
             projects: [firstProject, secondProject],
@@ -4343,14 +4380,19 @@ final class ConversationDataFlowTests: XCTestCase {
         store.selectedProjectID = firstProject.id
         store.sessionSearchQuery = "App Store"
         XCTAssertEqual(store.filteredSessions.map(\.id), [metadataReview.id])
+        XCTAssertEqual(store.sessionLibrarySessions.map(\.id), [metadataReview.id])
         XCTAssertEqual(store.filteredSidebarProjects.map(\.id), [firstProject.id])
         XCTAssertEqual(store.sessionListSnapshot(forProjectID: firstProject.id).visibleSessions.map(\.id), [metadataReview.id])
 
         store.sessionSearchQuery = "proj_beta"
+        XCTAssertEqual(store.sessionLibrarySessions.map(\.id), [featureAudit.id])
         XCTAssertEqual(store.filteredSidebarProjects.map(\.id), [secondProject.id])
 
         store.sessionSearchQuery = ""
         XCTAssertEqual(store.filteredSessions.map(\.id), [metadataReview.id])
+        // 全局会话库和“最近”不受当前工作区筛选影响，并严格按最后活动时间排序。
+        XCTAssertEqual(store.sessionLibrarySessions.map(\.id), [featureAudit.id, metadataReview.id])
+        XCTAssertEqual(store.recentSessions.map(\.id), [featureAudit.id, metadataReview.id])
         XCTAssertEqual(Set(store.filteredSidebarProjects.map(\.id)), Set([firstProject.id, secondProject.id]))
     }
 
@@ -5766,6 +5808,21 @@ final class ConversationDataFlowTests: XCTestCase {
 
     // 回归：新建会话在创建瞬间就绑定 runtime。入口显式选择 Claude 时，createSession 请求必须
     // 携带 runtimeProvider=claude，否则空线程会落在默认 Codex 通道上且事后无法迁移。
+    func testWorkspaceSessionRuntimeChoicesExposeClaudeProviderOnlyWhenAvailable() {
+        XCTAssertEqual(
+            WorkspaceSessionRuntimeChoice.available(claudeChannelAvailable: false),
+            [.codex],
+            "Claude 通道不可用时，工作区入口只能创建 Codex 会话"
+        )
+        XCTAssertEqual(
+            WorkspaceSessionRuntimeChoice.available(claudeChannelAvailable: true),
+            [.codex, .claude],
+            "Claude 通道可用时，工作区入口必须显式暴露 Claude 会话动作"
+        )
+        XCTAssertNil(WorkspaceSessionRuntimeChoice.codex.runtimeProvider)
+        XCTAssertEqual(WorkspaceSessionRuntimeChoice.claude.runtimeProvider, "claude")
+    }
+
     func testStartNewSessionWithClaudeRuntimeCarriesRuntimeProviderInCreatePayload() async throws {
         let project = makeProject(id: "proj_claude_entry")
         let created = makeSession(id: "claude_created", projectID: project.id, title: "Claude 会话", status: "closed", source: "claude")
@@ -6398,7 +6455,7 @@ final class ConversationDataFlowTests: XCTestCase {
         XCTAssertTrue(conversationStore.messages(for: history.id).contains { $0.content == "历史回答" })
     }
 
-    func testRefreshCurrentContextDoesNotWaitForSessionListReconciliation() async {
+    func testRefreshCurrentContextReusesRecentSessionListWithoutWaiting() async throws {
         let project = makeProject(id: "proj_1")
         let history = makeSession(id: "codex_history", projectID: project.id, title: "历史", status: "history", source: "codex", resumeID: "history")
         let client = BlockingSessionListRefreshClient(projects: [project], page: SessionsPage(sessions: [history]))
@@ -6419,12 +6476,12 @@ final class ConversationDataFlowTests: XCTestCase {
             refreshFinished = true
         }
 
-        await client.waitForBlockedSessionListRefresh()
+        try await Task.sleep(nanoseconds: 50_000_000)
         let finishedBeforeListRelease = refreshFinished
-        client.releaseBlockedSessionListRefresh()
         await refreshTask.value
 
         XCTAssertTrue(finishedBeforeListRelease)
+        XCTAssertEqual(client.sessionsPageCallCount, 1, "刚完成 refreshAll 时，历史刷新校准应复用首屏短缓存")
         XCTAssertEqual(client.requestedMessageCursors, [nil, nil])
     }
 
@@ -6810,8 +6867,8 @@ final class ConversationDataFlowTests: XCTestCase {
     func testSessionInspectorSectionsCollapseDetailsLogsAndDiagnostics() {
         let descriptors = SessionInspectorSectionDescriptor.all
 
-        XCTAssertEqual(descriptors.map(\.title), ["概览", "活动", "Git", "审批"])
-        XCTAssertEqual(descriptors.map(\.id), ["context", "activity", "diff", "approval"])
+        XCTAssertEqual(descriptors.map(\.title), ["概览", "变更", "活动"])
+        XCTAssertEqual(descriptors.map(\.id), ["overview", "changes", "activity"])
         XCTAssertFalse(descriptors.contains { $0.title == "诊断" })
         XCTAssertFalse(descriptors.contains { $0.title == "详情" })
         XCTAssertFalse(descriptors.contains { $0.title == "日志" })
@@ -9985,6 +10042,46 @@ final class ConversationDataFlowTests: XCTestCase {
         await second.value
     }
 
+    func testRefreshAllAndSelectedProjectRefreshShareOneListRequest() async throws {
+        let project = makeProject(id: "proj_cross_refresh_list")
+        let session = makeSession(
+            id: "thread_cross_refresh_list",
+            projectID: project.id,
+            title: "跨入口合并列表",
+            status: "history",
+            source: "codex"
+        )
+        let client = BlockingSessionListRefreshClient(
+            projects: [project],
+            page: SessionsPage(sessions: [session]),
+            blockOnCall: 1
+        )
+        let appStore = AppStore()
+        let store = SessionStore(
+            appStore: appStore,
+            conversationStore: ConversationStore(),
+            logStore: LogStore(),
+            recentWorkspaceStore: makeRecentWorkspaceStore(
+                workspaces: [AgentWorkspace(project: project)],
+                endpoint: appStore.endpoint
+            ),
+            clientFactory: { client }
+        )
+
+        store.selectedProjectID = project.id
+        let refreshAll = Task { await store.refreshAll(autoAttach: false) }
+        await client.waitForBlockedSessionListRefresh()
+        let selectedRefresh = Task { await store.refreshSelectedProjectSessions(showLoading: false) }
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        // refreshAll 与列表轮询共用同一个 thread/list；否则 gateway 会把后发请求拒绝为 -32080。
+        XCTAssertEqual(client.sessionsPageCallCount, 1)
+        client.releaseBlockedSessionListRefresh()
+        await refreshAll.value
+        await selectedRefresh.value
+        XCTAssertNil(store.errorMessage)
+    }
+
     func testMultiRuntimeHistoryPreservesEconomyAndFullLoadModes() async throws {
         let project = AgentProject(id: "proj_multi_history_mode", name: "History Mode", path: "/tmp/multi-history-mode")
         let config = makeDirectAppServerConfig(
@@ -10033,7 +10130,8 @@ final class ConversationDataFlowTests: XCTestCase {
         let fullTask = Task {
             try await client.messagesPage(sessionID: "thread_history_mode", before: nil, limit: 20, loadMode: .full)
         }
-        let fullRequest = try await waitForFakeAppServerRequest(codexTransport, method: "thread/turns/list", after: 3)
+        // sentMessages[3] 仍是上一条 economy 请求；full 请求从下一个下标开始等待。
+        let fullRequest = try await waitForFakeAppServerRequest(codexTransport, method: "thread/turns/list", after: 4)
         XCTAssertEqual(fullRequest.params?.objectValue?["itemsView"]?.stringValue, "full")
         transportResponse(codexTransport, id: fullRequest.id, result: #"{"data":[],"nextCursor":null}"#)
         let fullPage = try await fullTask.value
@@ -10884,15 +10982,17 @@ private final class MutableSessionPageClient: SessionStoreAPIClient {
 private final class BlockingSessionListRefreshClient: SessionStoreAPIClient {
     let projectsResult: [AgentProject]
     let page: SessionsPage
+    let blockOnCall: Int
     private(set) var requestedMessageCursors: [String?] = []
     private(set) var sessionsPageCallCount = 0
     private var blockedListRefreshCount = 0
     private var blockedListContinuations: [CheckedContinuation<SessionsPage, Never>] = []
     private var blockedListWaiters: [CheckedContinuation<Void, Never>] = []
 
-    init(projects: [AgentProject], page: SessionsPage) {
+    init(projects: [AgentProject], page: SessionsPage, blockOnCall: Int = 2) {
         self.projectsResult = projects
         self.page = page
+        self.blockOnCall = blockOnCall
     }
 
     func projects() async throws -> [AgentProject] {
@@ -10905,10 +11005,10 @@ private final class BlockingSessionListRefreshClient: SessionStoreAPIClient {
 
     func sessionsPage(projectID: String?, cursor: String?, limit: Int?) async throws -> SessionsPage {
         sessionsPageCallCount += 1
-        guard sessionsPageCallCount > 1 else {
+        guard sessionsPageCallCount >= blockOnCall else {
             return page
         }
-        // 第二次列表请求模拟慢 thread/list：当前会话刷新不应该等它结束。
+        // 默认从第二次开始模拟慢 thread/list；指定 blockOnCall=1 时可复现 refreshAll 与轮询竞态。
         return await withCheckedContinuation { continuation in
             blockedListContinuations.append(continuation)
             blockedListRefreshCount += 1
@@ -14341,9 +14441,12 @@ extension ConversationDataFlowTests {
             XCTFail("Expected warning")
         }
 
-        let error = try decodeAppServerNotification(#"{"method":"error","params":{"message":"boom"}}"#)
-        if case .error(let message) = try XCTUnwrap(projector.project(error)) {
-            XCTAssertEqual(message, "boom")
+        let error = try decodeAppServerNotification(#"{"method":"error","params":{"threadId":"thr_demo","turnId":"turn_demo","error":{"message":"boom","code":"authentication_failed"}}}"#)
+        if case .error(let payload, let meta) = try XCTUnwrap(projector.project(error)) {
+            XCTAssertEqual(payload.message, "boom")
+            XCTAssertEqual(payload.code, "authentication_failed")
+            XCTAssertEqual(meta.sessionID, "thr_demo")
+            XCTAssertEqual(meta.turnID, "turn_demo")
         } else {
             XCTFail("Expected error")
         }

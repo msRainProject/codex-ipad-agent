@@ -1783,7 +1783,9 @@ actor CodexAppServerSessionRuntime {
             return metadata.sessionID
         case .goalUpdated(let goal, let metadata):
             return metadata.sessionID ?? goal.threadID
-        case .error, .unknown:
+        case .error(_, let metadata):
+            return metadata.sessionID
+        case .unknown:
             return nil
         }
     }

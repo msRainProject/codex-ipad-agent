@@ -241,18 +241,29 @@ actor EventReducer {
                 seq: nil
             ))
             output.messageMutations.append(.system("运行警告：\(payload.message)", fallbackSessionID, .error, metadata))
-        case .error(let message):
-            output.foregroundClears.append(fallbackSessionID)
-            output.activeTurnMutations.append(.clear(fallbackSessionID, nil))
-            output.pendingApprovalUpdates.append((fallbackSessionID, nil))
-            output.pendingUserInputUpdates.append((fallbackSessionID, nil))
-            output.errorMessage = message
+        case .error(let payload, let metadata):
+            let id = metadata.sessionID ?? fallbackSessionID
+            // 多 runtime 下错误必须按通知携带的 thread 归属，不能回退到当前选中的其他会话。
+            output.statusUpdates.append((id, SessionStatus.failed.rawValue))
+            output.foregroundClears.append(id)
+            output.activeTurnMutations.append(.clear(id, metadata.turnID))
+            output.pendingApprovalUpdates.append((id, nil))
+            output.pendingUserInputUpdates.append((id, nil))
+            output.contextUpdates.append((
+                SessionContextSnapshot(
+                    sessionID: id,
+                    status: SessionContextStatus(type: "systemError"),
+                    updatedAt: Date()
+                ),
+                id
+            ))
+            output.errorMessage = payload.message
             output.logAppends.append(EventReducerLogAppend(
-                text: "\n[agentd] \(message)\n",
-                sessionID: fallbackSessionID,
+                text: "\n[agentd] \(payload.message)\n",
+                sessionID: id,
                 seq: nil
             ))
-            output.messageMutations.append(.system("运行错误：\(message)", fallbackSessionID, .error, nil))
+            output.messageMutations.append(.system("运行错误：\(payload.message)", id, .error, metadata))
         case .unknown(let type):
             output.logAppends.append(EventReducerLogAppend(
                 text: "\n[agentd] 未知消息类型：\(type)\n",

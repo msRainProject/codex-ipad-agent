@@ -746,6 +746,11 @@ struct HistoryLoadProgress: Equatable {
     }
 }
 
+struct SessionRestoreSnapshot: Codable, Equatable {
+    let endpoint: String
+    let session: AgentSession
+}
+
 @MainActor
 final class SessionStore: ObservableObject {
     @Published private(set) var projects: [AgentProject] = [] {
@@ -1202,6 +1207,16 @@ final class SessionStore: ObservableObject {
         return sessionsMatchingSearch(base)
     }
 
+    /// 会话库不跟随 selectedProjectID 过滤；根侧栏和会话页始终看到同一份跨工作区轻量索引。
+    var sessionLibrarySessions: [AgentSession] {
+        sessionsMatchingSearch(Self.sortedSessions(sessions.filter(isListableSession)))
+    }
+
+    /// 最近列表严格按活动时间排序，置顶只影响完整会话库，不改变“最近”的时间语义。
+    var recentSessions: [AgentSession] {
+        Array(Self.sortedSessions(sessions.filter(isListableSession)).prefix(8))
+    }
+
     var filteredSidebarProjects: [AgentProject] {
         guard isSessionSearchActive else {
             return sidebarProjects
@@ -1437,7 +1452,7 @@ final class SessionStore: ObservableObject {
         return historyLoadProgressBySessionID[sessionID]
     }
 
-    func bootstrap() async {
+    func bootstrap(restoring snapshot: SessionRestoreSnapshot? = nil) async {
 #if DEBUG
         if appStore.shouldSeedDebugWorkbenchUI {
             applyDebugWorkbenchUISeedIfNeeded()
@@ -1455,6 +1470,29 @@ final class SessionStore: ObservableObject {
         // 真正加载完成。否则只要 projects 一到手就收手，首屏会停在“有项目、无会话、点什么都
         // 连不上”的半成品状态，只能靠用户杀进程重开才恢复。
         await refreshUntilLoaded(maxWait: 45, autoAttach: true)
+        if let snapshot {
+            await restoreSessionIfPossible(snapshot)
+        }
+    }
+
+    private func restoreSessionIfPossible(_ snapshot: SessionRestoreSnapshot) async {
+        guard AgentAPIClient.normalizedEndpoint(snapshot.endpoint) == AgentAPIClient.normalizedEndpoint(appStore.endpoint),
+              let workspace = ensureWorkspaceForKnownProjectID(snapshot.session.projectID)
+        else { return }
+
+        // 先让 runtime 从真实 thread/list 建立 session→provider 路由；旧会话不在首屏时再使用本地轻量快照。
+        do {
+            let page = try await sessionListFirstPage(workspace: workspace, limit: Self.initialSessionPageLimit, reuseRecent: true)
+            mergeSessionPage(sessions(page.sessions, in: workspace))
+            updateSessionPageState(projectID: workspace.id, page: page)
+        } catch {
+            // 恢复快照仍须经过工作区授权校验；单次列表失败不应让用户丢掉上次阅读位置。
+        }
+
+        let restored = sessionsByID[snapshot.session.id] ?? session(snapshot.session, in: workspace)
+        guard restored.projectID == workspace.id else { return }
+        mergeSessionPage([restored])
+        await selectSession(restored)
     }
 
 #if DEBUG
@@ -1725,7 +1763,14 @@ final class SessionStore: ObservableObject {
                 return
             }
             activeWorkspace = workspace
-            let page = try await client.sessionsPage(workspace: workspace, cursor: nil, limit: Self.initialSessionPageLimit)
+            // refreshAll 也必须进入首屏列表 single-flight。否则它与前台轮询或手动刷新重叠时，
+            // 会向 gateway 发出两个相同 thread/list，后发请求被保护策略拒绝为 -32080。
+            // reuseRecent=false 只绕过短缓存，不绕过正在执行的共享请求，仍保持全量刷新的语义。
+            let page = try await sessionListFirstPage(
+                workspace: workspace,
+                limit: Self.initialSessionPageLimit,
+                reuseRecent: false
+            )
             guard connectionGeneration == appStore.connectionGeneration else {
                 return
             }
@@ -2659,6 +2704,32 @@ final class SessionStore: ObservableObject {
             return
         }
         await refreshSessions(forProjectID: selectedProjectID, showLoading: showLoading)
+    }
+
+    /// 为单一全局侧栏加载跨工作区轻量索引。只取 thread/list 首屏，不读取任何消息历史。
+    func refreshSessionLibraryIndex() async {
+#if DEBUG
+        guard !isDebugWorkbenchUISeedActive else { return }
+#endif
+        let workspaces = Array(recentWorkspaces.prefix(8))
+        guard !workspaces.isEmpty else { return }
+        let generation = appStore.connectionGeneration
+
+        // 两个一组并发，兼顾首屏速度和本机 app-server 压力；底层继续复用 single-flight/短缓存。
+        for start in stride(from: 0, to: workspaces.count, by: 2) {
+            guard generation == appStore.connectionGeneration, !Task.isCancelled else { return }
+            let first = workspaces[start]
+            if start + 1 < workspaces.count {
+                let second = workspaces[start + 1]
+                async let firstResult = sessionLibraryPage(workspace: first)
+                async let secondResult = sessionLibraryPage(workspace: second)
+                let results = await [firstResult, secondResult]
+                mergeSessionLibraryPages(results, generation: generation)
+            } else {
+                let result = await sessionLibraryPage(workspace: first)
+                mergeSessionLibraryPages([result], generation: generation)
+            }
+        }
     }
 
     func pollSelectedProjectSessionsWhileVisible() async {
@@ -3841,7 +3912,8 @@ final class SessionStore: ObservableObject {
         if lowerMessage.contains("thread/turns/list")
             || lowerMessage.contains("thread/read")
             || lowerMessage.contains("history response")
-            || lowerMessage.contains("limit/itemsview") {
+            || lowerMessage.contains("limit/itemsview")
+            || message.contains("相同历史或列表请求仍在执行") {
             return false
         }
         return !(message.contains("历史响应")
@@ -4147,6 +4219,35 @@ final class SessionStore: ObservableObject {
             if reportErrorOnFailure, selectedProjectID == projectID {
                 await handleWorkspaceLoadFailure(workspace: workspace, error: error)
             }
+        }
+    }
+
+    private func sessionLibraryPage(
+        workspace: AgentWorkspace
+    ) async -> (workspace: AgentWorkspace, page: SessionsPage?) {
+        do {
+            let page = try await sessionListFirstPage(
+                workspace: workspace,
+                limit: 8,
+                reuseRecent: true
+            )
+            return (workspace, page)
+        } catch {
+            // 某个最近工作区失效不能阻断整个会话库；该项目仍可在工作区页单独重试。
+            return (workspace, nil)
+        }
+    }
+
+    private func mergeSessionLibraryPages(
+        _ results: [(workspace: AgentWorkspace, page: SessionsPage?)],
+        generation: Int
+    ) {
+        guard generation == appStore.connectionGeneration else { return }
+        for result in results {
+            guard let page = result.page else { continue }
+            mergeSessionPage(sessions(page.sessions, in: result.workspace))
+            updateSessionPageState(projectID: result.workspace.id, page: page)
+            clearWorkspaceUnavailable(result.workspace.id)
         }
     }
 
@@ -5465,9 +5566,10 @@ final class SessionStore: ObservableObject {
              .userInputRequest(_, let metadata),
              .userInputResolved(let metadata, _),
              .turnCompleted(let metadata),
-             .warning(_, let metadata):
+             .warning(_, let metadata),
+             .error(_, let metadata):
             return metadata
-        case .error, .unknown:
+        case .unknown:
             return nil
         }
     }
@@ -5512,12 +5614,13 @@ final class SessionStore: ObservableObject {
                 body: sessionDisplayTitle(sessionID: sessionID),
                 kind: .failed
             )
-        case .error(let message):
+        case .error(let payload, let metadata):
+            let sessionID = metadata.sessionID ?? fallbackSessionID
             return SessionRuntimeNotification(
-                id: "failed:\(fallbackSessionID):\(message)",
-                sessionID: fallbackSessionID,
+                id: "failed:\(sessionID):\(payload.message)",
+                sessionID: sessionID,
                 title: "会话错误",
-                body: message,
+                body: payload.message,
                 kind: .failed
             )
         default:
@@ -5582,8 +5685,8 @@ final class SessionStore: ObservableObject {
             } else if !Self.isRunningStatus(status) {
                 clearRuntimeActivity(sessionID: sessionID)
             }
-        case .error:
-            clearRuntimeActivity(sessionID: fallbackSessionID)
+        case .error(_, let metadata):
+            clearRuntimeActivity(sessionID: metadata.sessionID ?? fallbackSessionID)
         case .session(let session):
             syncRuntimeActivity(with: session)
         case .sessionRow(let row, _):

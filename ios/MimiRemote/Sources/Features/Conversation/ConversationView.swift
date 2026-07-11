@@ -2297,7 +2297,7 @@ private struct MessageBubble: View {
     }
 
     private var userBubbleForeground: Color {
-        Color(red: 0.97, green: 0.94, blue: 0.99)
+        themeStore.tokens(for: colorScheme).userBubbleForeground
     }
 }
 

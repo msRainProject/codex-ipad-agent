@@ -470,12 +470,12 @@ struct ComposerView: View {
         let visibleGoal = selectedVisibleThreadGoal
         let usageNotice = selectedComposerUsageNotice
         if sessionStore.selectedSessionControlNotice != nil ||
-            sessionStore.selectedQuotaNotice != nil ||
             usageNotice != nil ||
             visibleGoal != nil {
             ComposerStatusTray(
                 sessionControlNotice: sessionStore.selectedSessionControlNotice,
-                quotaNotice: sessionStore.selectedQuotaNotice,
+                // 阻断额度已经由 Conversation 顶部唯一状态区展示，Composer 不再重复一份。
+                quotaNotice: nil,
                 usage: usageNotice,
                 goal: visibleGoal,
                 isGoalExpanded: isGoalStatusExpanded,
@@ -544,7 +544,8 @@ struct ComposerView: View {
     // 右＝会话运行时的 Ctrl-C / 停止。三者各就各位，不再各自独占一整行往上堆。
     @ViewBuilder
     private var composerStatusRow: some View {
-        let chips = displayChipItems
+        // 模型、权限和发送模式已经合并到输入框内的一枚配置摘要；这里只保留实时语音与停止控制。
+        let chips: [ComposerChipItem] = []
         let showWave = isVoiceActive
         let showControls = canShowRunningControls
         if !chips.isEmpty || showWave || showControls {
@@ -634,12 +635,13 @@ struct ComposerView: View {
                 .accessibilityLabel("发送 Ctrl-C")
             }
 
-            Button(role: .destructive) {
+            Button {
                 Task { await sessionStore.stopSelectedSession() }
             } label: {
                 Label("停止", systemImage: "xmark.circle")
             }
             .buttonStyle(.bordered)
+            .tint(themeStore.tokens(for: colorScheme).primaryAction)
             .accessibilityLabel("停止当前会话")
         }
         .controlSize(.small)
@@ -834,9 +836,12 @@ struct ComposerView: View {
 
     @ViewBuilder
     private var toolbarMenuRow: some View {
-        composerMoreMenu
-            .font(themeStore.uiFont(.caption, weight: .medium))
-            .controlSize(.regular)
+        HStack(spacing: 8) {
+            addContentButton
+            composerMoreMenu
+        }
+        .font(themeStore.uiFont(.caption, weight: .medium))
+        .controlSize(.regular)
     }
 
     private var composerVoiceActionColumn: some View {
@@ -988,17 +993,35 @@ struct ComposerView: View {
                 voiceLanguageMenu
             }
         } label: {
-            Label("更多", systemImage: "ellipsis.circle")
-                .frame(minHeight: 44)
+            ViewThatFits(in: .horizontal) {
+                Label(composerConfigurationSummary, systemImage: "slider.horizontal.3")
+                    .lineLimit(1)
+                Image(systemName: "slider.horizontal.3")
+                    .accessibilityLabel(composerConfigurationSummary)
+            }
+            .frame(minHeight: 44)
         }
-        .buttonStyle(.bordered)
-        .accessibilityLabel("更多设置")
+        .buttonStyle(.glass)
+        .tint(themeStore.tokens(for: colorScheme).accent)
+        .accessibilityLabel("运行设置")
         .accessibilityValue(moreMenuAccessibilitySummary)
         .accessibilityHint("添加附件、选择发送模式、权限和运行选项")
     }
 
     private var moreMenuAccessibilitySummary: String {
         "\(composerState.permissionMode.title)，运行，语音 \(selectedVoiceLanguage.title)"
+    }
+
+    private var composerConfigurationSummary: String {
+        let mode: String
+        if composerState.isGoalModeSelected {
+            mode = "目标"
+        } else if composerState.isPlanModeSelected {
+            mode = "计划"
+        } else {
+            mode = "默认"
+        }
+        return "\(selectedModelSummaryTitle) · \(composerState.permissionMode.chipTitle) · \(mode)"
     }
 
     private var skillShortcutMenu: some View {
@@ -1692,7 +1715,7 @@ struct ComposerView: View {
         }
         var items: [(text: String, symbol: String, tint: Color)] = []
         if session.activeTurnID != nil {
-            items.append(("回合处理中", "bolt.fill", themeStore.tokens(for: colorScheme).success))
+            items.append(("回合处理中", "bolt.fill", themeStore.tokens(for: colorScheme).primaryAction))
         }
         if let lastSeq = session.lastSeq {
             items.append(("seq \(lastSeq)", "number", .secondary))
@@ -1761,7 +1784,7 @@ struct ComposerView: View {
             .padding(.horizontal, showLabels ? 18 : 0)
             .frame(minWidth: 44)
             .background(
-                enabled ? tokens.accent : tokens.elevatedSurface,
+                enabled ? tokens.primaryAction : tokens.elevatedSurface,
                 in: RoundedRectangle(cornerRadius: 12, style: .continuous)
             )
             .overlay {
@@ -3108,6 +3131,9 @@ private struct AddContentPanel: View {
 }
 
 private struct VoiceMicButton: View {
+    @EnvironmentObject private var themeStore: ThemeStore
+    @Environment(\.colorScheme) private var colorScheme
+
     let isPreparing: Bool
     let isRecording: Bool
     let isTranscribing: Bool
@@ -3125,7 +3151,7 @@ private struct VoiceMicButton: View {
             .frame(minWidth: 44, minHeight: 44)
         }
         .buttonStyle(.bordered)
-        .tint(isRecording ? .red : .accentColor)
+        .tint(themeStore.tokens(for: colorScheme).primaryAction)
         .controlSize(.large)
         .disabled(isPreparing || isTranscribing)
         .accessibilityLabel(accessibilityTitle)

@@ -47,6 +47,7 @@
 		9FCCC7A13E2113887C18513F /* AgentEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5330D382730C4473E4D9EC92 /* AgentEvent.swift */; };
 		A3D2577AA6E9A37E62C67FDC /* SessionContextStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B923E4207A9FD4C35766E4CA /* SessionContextStore.swift */; };
 		A44C4B01562D78D25968ABFF /* AppStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C9DB99DDCE7CA778B616657 /* AppStore.swift */; };
+		A88F2FBBEE8A6F5F5C0283F5 /* UnifiedWorkbenchShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 089CDD9B409CEDE6D600DA58 /* UnifiedWorkbenchShell.swift */; };
 		AFE6EEB69B15A356E950F6AC /* AnsiCleaner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9145366BE7345CD146DFA0AE /* AnsiCleaner.swift */; };
 		B1015E389669F77748949820 /* ProjectSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 640F92290AC3DAED201E1CD0 /* ProjectSidebarView.swift */; };
 		B2628282609AF897C62B6178 /* testProjectSessionDashboard.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 2E4A0A29797384D5BD5002D1 /* testProjectSessionDashboard.1.png */; };
@@ -82,6 +83,7 @@
 /* Begin PBXFileReference section */
 		00BF9FE4AEE49C6DD13873AA /* testComposerStatusTrayCrowdedCompactWidth.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = testComposerStatusTrayCrowdedCompactWidth.1.png; sourceTree = "<group>"; };
 		02BA631A94730FC521FE15F6 /* AssistantTextNormalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantTextNormalizer.swift; sourceTree = "<group>"; };
+		089CDD9B409CEDE6D600DA58 /* UnifiedWorkbenchShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnifiedWorkbenchShell.swift; sourceTree = "<group>"; };
 		0FC920B8D7FE7F76E2C18FD7 /* testConversationBubbleAlignment.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = testConversationBubbleAlignment.1.png; sourceTree = "<group>"; };
 		163EC3A1080DFD2A3BB8F098 /* ComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerView.swift; sourceTree = "<group>"; };
 		190DA6E3F95C3577B94AB67C /* testAppearancePreview.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = testAppearancePreview.1.png; sourceTree = "<group>"; };
@@ -313,6 +315,7 @@
 				07334FBA823A35EA493A64E6 /* Projects */,
 				975410DDDD76C2AEF9C403D3 /* Sessions */,
 				E173A0975FB9DBD65B3217A8 /* Settings */,
+				CDD0A924F91498466D80EC3E /* Shell */,
 			);
 			path = Features;
 			sourceTree = "<group>";
@@ -349,6 +352,14 @@
 				F475933ABB67E38BB076AE34 /* Tests */,
 				3CD2BA4AF1CA4C78414FAB9F /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		CDD0A924F91498466D80EC3E /* Shell */ = {
+			isa = PBXGroup;
+			children = (
+				089CDD9B409CEDE6D600DA58 /* UnifiedWorkbenchShell.swift */,
+			);
+			path = Shell;
 			sourceTree = "<group>";
 		};
 		CE622BAC86264F0D4BB5E62D /* Core */ = {
@@ -574,6 +585,7 @@
 				2988A74079D67A66B14DFF98 /* SettingsView.swift in Sources */,
 				FC192D8EA361C1588BA2C2DF /* ThemeStore.swift in Sources */,
 				958AE82A3087284FEE63DBB8 /* TokenStore.swift in Sources */,
+				A88F2FBBEE8A6F5F5C0283F5 /* UnifiedWorkbenchShell.swift in Sources */,
 				8C027A403C453281A5BD7812 /* WorkspaceRootView.swift in Sources */,
 				0E20F441A1A1B56E39868A44 /* WorkspaceView.swift in Sources */,
 			);

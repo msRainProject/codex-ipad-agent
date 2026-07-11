@@ -1251,7 +1251,7 @@ private struct SessionRow: View, Equatable {
         // 侧栏只让运行、等待、失败等需要处理的状态使用强色；完成/历史态退到中性色。
         switch tone {
         case .active:
-            return tokens.success
+            return tokens.primaryAction
         case .warning:
             return tokens.warning
         case .danger:
@@ -1626,7 +1626,7 @@ private struct WorktreeManagerRow: View {
                 if isRunning {
                     Text("运行中")
                         .font(themeStore.uiFont(size: 11, weight: .semibold))
-                        .foregroundStyle(tokens.success)
+                        .foregroundStyle(tokens.primaryAction)
                 }
             }
 
