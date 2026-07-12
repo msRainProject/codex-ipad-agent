@@ -4346,6 +4346,43 @@ final class ConversationDataFlowTests: XCTestCase {
         XCTAssertEqual(store.sidebarProjects.map(\.id), [project.id])
     }
 
+    func testWorkspaceCatalogKeepsOnlyExplicitlyOpenedDirectories() async throws {
+        let openedProject = makeProject(id: "opened-project")
+        let legacyAutoProject = makeProject(id: "legacy-auto-project")
+        let unopenedCandidate = makeProject(id: "unopened-candidate")
+        let openedWorkspace = AgentWorkspace(
+            project: openedProject,
+            lastOpenedAt: Date(timeIntervalSince1970: 100)
+        )
+        // 旧版目录刷新会把 projects() 候选项直接写入 recent，特征是没有明确打开时间。
+        let legacyAutoWorkspace = AgentWorkspace(project: legacyAutoProject)
+        let appStore = AppStore()
+        let recentStore = makeRecentWorkspaceStore(
+            workspaces: [openedWorkspace, legacyAutoWorkspace],
+            endpoint: appStore.endpoint
+        )
+        let client = MockSessionStoreClient(
+            projects: [openedProject, legacyAutoProject, unopenedCandidate],
+            sessions: []
+        )
+        let store = SessionStore(
+            appStore: appStore,
+            conversationStore: ConversationStore(),
+            logStore: LogStore(),
+            recentWorkspaceStore: recentStore,
+            clientFactory: { client }
+        )
+
+        await store.refreshAll(autoAttach: false)
+        XCTAssertEqual(Set(store.sidebarProjects.map(\.id)), [openedProject.id, legacyAutoProject.id])
+
+        try await store.refreshWorkspaceCatalog()
+
+        XCTAssertEqual(store.projects.map(\.id), [openedProject.id, legacyAutoProject.id, unopenedCandidate.id])
+        XCTAssertEqual(store.sidebarProjects.map(\.id), [openedProject.id])
+        XCTAssertEqual(recentStore.load(endpoint: appStore.endpoint).map(\.id), [openedProject.id])
+    }
+
     func testApprovalSummaryDecodesLegacyPayloadAndRequiresDetailsForApproval() throws {
         let legacyJSON = #"{"id":"approval-legacy","title":"运行命令","kind":"command","count":1}"#
         let legacy = try JSONDecoder().decode(ApprovalSummary.self, from: Data(legacyJSON.utf8))

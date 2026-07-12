@@ -151,7 +151,8 @@ struct UnifiedWorkbenchShell: View {
                         .frame(height: 46)
                 }
                 .buttonStyle(.glassProminent)
-                .buttonBorderShape(.roundedRectangle(radius: 12))
+                // 与上方 List 的选中态统一使用胶囊轮廓，避免一个偏圆、一个偏方。
+                .buttonBorderShape(.capsule)
                 .tint(tokens.primaryAction)
                 .accessibilityLabel("新建会话")
             }
