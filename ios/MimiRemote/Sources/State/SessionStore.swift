@@ -1869,19 +1869,19 @@ final class SessionStore: ObservableObject {
         let fetchedProjects = try await clientFactory().projects()
         setProjectsIfChanged(fetchedProjects)
 
-        var nextWorkspaces = recentWorkspaces
-        let knownIDs = Set(nextWorkspaces.map(\.id))
-        for project in fetchedProjects where !knownIDs.contains(project.id) {
-            nextWorkspaces.append(AgentWorkspace(project: project))
-        }
-        nextWorkspaces.sort { lhs, rhs in
-            let lhsDate = lhs.lastOpenedAt ?? .distantPast
-            let rhsDate = rhs.lastOpenedAt ?? .distantPast
-            if lhsDate != rhsDate {
-                return lhsDate > rhsDate
+        // projects() 是后端可选目录，不等于用户已打开的工作区。旧实现把所有候选目录
+        // 自动写进最近列表；手动 openWorkspace/rememberWorkspace 会写入 lastOpenedAt，
+        // 因此这里只保留明确打开过的目录，并顺带迁移清理旧版自动灌入项。
+        let nextWorkspaces = recentWorkspaces
+            .filter { $0.lastOpenedAt != nil }
+            .sorted { lhs, rhs in
+                let lhsDate = lhs.lastOpenedAt ?? .distantPast
+                let rhsDate = rhs.lastOpenedAt ?? .distantPast
+                if lhsDate != rhsDate {
+                    return lhsDate > rhsDate
+                }
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
             }
-            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-        }
         recentWorkspaceStore.save(nextWorkspaces, endpoint: appStore.endpoint)
         setRecentWorkspacesIfChanged(nextWorkspaces)
     }

@@ -83,11 +83,9 @@ struct WorkspaceRootView: View {
         }
         .task {
             synchronizeSelection()
-            if sessionStore.sidebarProjects.isEmpty && !sessionStore.isLoading {
-                await refreshCatalog()
-            } else if !sessionStore.sidebarProjects.isEmpty {
-                catalogState = .loaded
-            }
+            // 每次进入工作区都做轻量目录同步，同时执行旧版自动候选数据清理；
+            // 该请求不改变当前会话和 WebSocket，上层选择保持稳定。
+            await refreshCatalog()
         }
         .onChange(of: sessionStore.sidebarProjects.map(\.id)) { _, _ in
             synchronizeSelection()
