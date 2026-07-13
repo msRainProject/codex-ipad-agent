@@ -5,7 +5,6 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 NOTICES="THIRD_PARTY_NOTICES.md"
-PACKAGE_RESOLVED="ios/MimiRemote/MimiRemote.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
 
 for command_name in go ruby rg awk; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
@@ -83,36 +82,6 @@ validate_go_module_license() {
   fi
 }
 
-validate_swift_license_checksum() {
-  local identity="$1"
-  local version="$2"
-  local expected=""
-  local license_body
-  local actual
-
-  # 摘要由 Package.resolved 对应 revision 的上游 LICENSE/NOTICE 生成，防止正文被误删或截断。
-  case "$identity|$version" in
-    "swift-markdown|0.8.0") expected="a287d3f38552a2b7c9264319761b03d49e1ab1c5c11ebbe4ed68328b45555e88" ;;
-    "swift-markdown NOTICE|0.8.0") expected="d111b6caf5376721efa735dc47069c2fc9b245ecbc3c7ada8c59d6c823141e30" ;;
-    "swift-cmark|0.8.0") expected="883fd19b75bad9ff8b1ef0ce3e98e909b46cced8f85f2b06c6fc5b655014fa4e" ;;
-    "swift-syntax|603.0.1") expected="2245a990b635558be210fb3eb4f8a6f7a49aebc0fefbf5859146a65ddc7ddcf3" ;;
-    "swift-snapshot-testing|1.19.2") expected="ae6b29268a507436557b16fd0a071bcb01398926b748ebf41e07f01a689189f5" ;;
-    "swift-custom-dump|1.6.0") expected="499cab523b8faf078485e35f6bf917c061b51cb8ab284569811c02e4f5622056" ;;
-    "xctest-dynamic-overlay|1.9.0") expected="499cab523b8faf078485e35f6bf917c061b51cb8ab284569811c02e4f5622056" ;;
-    *)
-      echo "第三方许可门禁失败：$identity $version 缺少 pinned Swift 许可证摘要。" >&2
-      exit 1
-      ;;
-  esac
-
-  license_body="$(notice_license_body "$identity" "$version")"
-  actual="$(printf '%s' "$license_body" | ruby -rdigest -e 'print Digest::SHA256.hexdigest(STDIN.read)')"
-  if [[ "$actual" != "$expected" ]]; then
-    echo "第三方许可门禁失败：$identity $version 的许可证正文与 pinned 摘要不一致。" >&2
-    exit 1
-  fi
-}
-
 go_version="$(go env GOVERSION)"
 require_notice_entry "Go standard library/runtime" "$go_version"
 if [[ "$(notice_license_body "Go standard library/runtime" "$go_version")" != "$(cat "$(go env GOROOT)/LICENSE")" ]]; then
@@ -130,40 +99,9 @@ while read -r module version; do
   validate_go_module_license "$module" "$version"
 done <<<"$go_modules"
 
-if [[ -d ios ]]; then
-  if [[ ! -f "$PACKAGE_RESOLVED" ]]; then
-    echo "第三方许可门禁失败：iOS 源码存在，但缺少 Swift Package.resolved。" >&2
-    exit 1
-  fi
-  if ! swift_pins="$(ruby -rjson -e '
-    JSON.parse(File.read(ARGV.fetch(0))).fetch("pins").each do |pin|
-      state = pin.fetch("state")
-      puts "#{pin.fetch("identity")} #{state["version"] || state.fetch("revision")}"
-    end
-  ' "$PACKAGE_RESOLVED")"; then
-    echo "第三方许可门禁失败：无法解析 Swift Package.resolved。" >&2
-    exit 1
-  fi
-  while read -r identity version; do
-    [[ -n "$identity" && -n "$version" ]] || continue
-    require_notice_entry "$identity" "$version"
-    validate_swift_license_checksum "$identity" "$version"
-  done <<<"$swift_pins"
-
-  require_notice_entry "swift-markdown NOTICE" "0.8.0"
-  validate_swift_license_checksum "swift-markdown NOTICE" "0.8.0"
-fi
-
 rg -Fq -- "THIRD_PARTY_NOTICES.md" .goreleaser.yml || {
   echo "第三方许可门禁失败：GoReleaser 归档未包含 THIRD_PARTY_NOTICES.md。" >&2
   exit 1
 }
-
-if [[ -d ios ]]; then
-  rg -Fq -- "THIRD_PARTY_NOTICES.md in Resources" ios/MimiRemote/MimiRemote.xcodeproj/project.pbxproj || {
-    echo "第三方许可门禁失败：iOS App 未打包 THIRD_PARTY_NOTICES.md。" >&2
-    exit 1
-  }
-fi
 
 echo "第三方许可门禁通过。"

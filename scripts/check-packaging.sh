@@ -27,8 +27,7 @@ for required_file in \
   scripts/check-release-prerequisites.sh \
   scripts/check-release-artifacts.sh \
   scripts/verify-release.sh \
-  docs/install-upgrade-rollback.md \
-  docs/p0-p1-roadmap.md; do
+  docs/install-upgrade-rollback.md; do
   [[ -f "$required_file" ]] || fail "缺少 $required_file。"
 done
 
@@ -89,14 +88,17 @@ grep -Fq 'GORELEASER_VERSION="2.15.3"' scripts/verify-release.sh \
 grep -Fq 'bash ./scripts/check-release-prerequisites.sh' .github/workflows/release.yml \
   || fail "Release workflow 没有调用公开发布前置门禁。"
 
-if grep -Fq 'go run github.com/goreleaser/goreleaser' \
-  README.md docs/p0-p1-roadmap.md docs/install-upgrade-rollback.md; then
+release_docs=(README.md docs/install-upgrade-rollback.md)
+[[ -f docs/p0-p1-roadmap.md ]] && release_docs+=(docs/p0-p1-roadmap.md)
+if grep -Fq 'go run github.com/goreleaser/goreleaser' "${release_docs[@]}"; then
   fail "公开发布文档仍在使用会切换构建工具链的 go run GoReleaser 命令。"
 fi
 grep -Fq 'bash ./scripts/verify-release.sh' README.md \
   || fail "README 没有使用统一的本地发布校验入口。"
-grep -Fq 'bash ./scripts/verify-release.sh' docs/p0-p1-roadmap.md \
-  || fail "P0/P1 清单没有使用统一的本地发布校验入口。"
+if [[ -f docs/p0-p1-roadmap.md ]]; then
+  grep -Fq 'bash ./scripts/verify-release.sh' docs/p0-p1-roadmap.md \
+    || fail "P0/P1 清单没有使用统一的本地发布校验入口。"
+fi
 grep -Fq 'bash ./scripts/install-linux.sh install' docs/install-upgrade-rollback.md \
   || fail "Linux 安装文档没有使用归档内的一键安装入口。"
 grep -Fq 'replace_existing_artifacts' docs/install-upgrade-rollback.md \

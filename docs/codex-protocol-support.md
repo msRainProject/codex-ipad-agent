@@ -64,7 +64,7 @@ Go Gateway 当前开放 23 个 client frame method，其中 `initialized` 是 no
 
 ## 关键 Notification 投影
 
-Gateway 保持 Notification 透明转发，iOS 第一批明确消费：
+Gateway 保持 Notification 透明转发，移动客户端第一批明确消费：
 
 - 计划：`item/plan/delta`、`turn/plan/updated`；
 - 推理摘要：`item/reasoning/summaryPartAdded`、`item/reasoning/summaryTextDelta`；
@@ -73,7 +73,7 @@ Gateway 保持 Notification 透明转发，iOS 第一批明确消费：
 - MCP：`item/mcpToolCall/progress`、`mcpServer/startupStatus/updated`；
 - 协议提醒：`deprecationNotice`。
 
-未知 Notification 不会造成连接失败，但在 iOS 明确适配前不会被当作已支持的产品能力。
+未知 Notification 不会造成连接失败，但在移动客户端明确适配前不会被当作已支持的产品能力。
 
 ## 明确不开放
 
@@ -86,7 +86,7 @@ Gateway 保持 Notification 透明转发，iOS 第一批明确消费：
 - realtime voice、remote control；
 - 已废弃的 `thread/rollback`。
 
-这些能力不是“漏做”，而是当前远程安全边界的一部分。需要新增时，必须同时补 Go 参数清洗、thread/cwd 授权、iOS 类型化处理和协议测试。
+这些能力不是“漏做”，而是当前远程安全边界的一部分。需要新增时，必须同时补 Go 参数清洗、thread/cwd 授权、客户端类型化处理和协议测试。
 
 ## 升级流程
 

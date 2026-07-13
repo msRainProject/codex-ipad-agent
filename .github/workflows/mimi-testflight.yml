@@ -44,8 +44,7 @@ jobs:
       TESTFLIGHT_WHATS_NEW: ${{ inputs.what_to_test || format('自动内测：{0}', github.event.head_commit.message) }}
       APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-      # 自托管 Runner 的凭据路径必须在仓库 Actions Variable 中显式配置，不能提交个人机器路径。
-      APP_STORE_CONNECT_API_KEY_PATH: ${{ vars.MIMI_ASC_API_KEY_PATH }}
+      ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
       IOS_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_BASE64 }}
       IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
       IOS_APPSTORE_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_APPSTORE_PROVISIONING_PROFILE_BASE64 }}
@@ -55,6 +54,17 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ inputs.ref || github.sha }}
+
+      - name: 准备临时 App Store Connect Key
+        run: |
+          set -euo pipefail
+          test -n "$APP_STORE_CONNECT_API_KEY_ID"
+          test -n "$ASC_PRIVATE_KEY"
+          asc_key="$RUNNER_TEMP/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
+          # 核心逻辑：从 GitHub Secret 生成本次任务专用文件，避免持久 Runner 依赖个人机器路径。
+          printf '%s' "$ASC_PRIVATE_KEY" > "$asc_key"
+          chmod 600 "$asc_key"
+          echo "APP_STORE_CONNECT_API_KEY_PATH=$asc_key" >> "$GITHUB_ENV"
 
       - name: 检查本机发布环境
         run: |
@@ -244,6 +254,7 @@ jobs:
             "${IOS_SIGNING_KEYCHAIN_PATH:-$RUNNER_TEMP/mimi-signing.keychain-db}" \
             2>/dev/null || true
           rm -f \
+            "${APP_STORE_CONNECT_API_KEY_PATH:-$RUNNER_TEMP/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8}" \
             "${IOS_INSTALLED_PROFILE_PATH:-}" \
             "${IOS_SIGNING_CERTIFICATE_PATH:-$RUNNER_TEMP/mimi-distribution.p12}" \
             "${IOS_SIGNING_PROFILE_PATH:-$RUNNER_TEMP/mimi-appstore.mobileprovision}" \

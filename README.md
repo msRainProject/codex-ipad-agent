@@ -702,11 +702,11 @@ curl -H "Authorization: Bearer $AGENTD_TOKEN" \
 
 - GitHub 主仓库名称必须为 `gaixianggeng/mimi-remote`，且 Visibility 必须为 **Public**，与 Go module、公开文档和 Formula homepage 保持一致。
 - `gaixianggeng/homebrew-tap` 已创建，且 Visibility 必须为 **Public**；只有两个仓库都公开，才能保证用户无需 GitHub 认证即可安装 Homebrew Formula。
-- 主仓库已配置 `TAP_GITHUB_TOKEN` secret，token 对 `homebrew-tap` 有 `contents:write` 权限。
+- 主仓库已配置 `TAP_DEPLOY_KEY` secret；对应公钥只以可写 Deploy Key 的形式安装在 `homebrew-tap`，不会复用维护者账号的广域 PAT。
 - Release workflow、GoReleaser 配置和源码改动已经 commit 并 push；确认后再打 `v*` tag。
 - 发布机或 CI 中 `go mod tidy` 不会产生额外 diff。
 
-Release workflow 会通过 GitHub API JSON 先验证主仓库名称、主仓库与 Tap 均为 PUBLIC，以及 Tap Token 具有 push 权限；任一条件不满足都会在 GoReleaser 发布前停止。门禁不输出 Token 或 API JSON 原文；本地可用 `bash ./scripts/check-release-prerequisites.sh --self-test` 验证 PUBLIC / PRIVATE / 损坏 JSON 的判定逻辑，不会访问网络。
+Release workflow 会通过 GitHub API JSON 先验证主仓库名称、主仓库与 Tap 均为 PUBLIC，再用 Deploy Key 对 Tap 的 `main` 执行无副作用的 dry-run push 验证写权限；任一条件不满足都会在 GoReleaser 发布前停止。门禁不输出私钥或 API JSON 原文；本地可用 `bash ./scripts/check-release-prerequisites.sh --self-test` 验证 PUBLIC / PRIVATE / 损坏 JSON 的判定逻辑，不会访问网络。
 
 发布前本地检查：
 

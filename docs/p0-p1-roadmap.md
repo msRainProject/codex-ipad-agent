@@ -48,17 +48,17 @@
 
 ### 正式发布前的外部动作
 
-代码准备完成不代表 GitHub 外部资源已经就绪。正式打 tag 前，仓库维护者必须逐项验证：
+后端公开仓库和 Tap 已按“后端开源、iOS 私有”的边界拆分。正式打 tag 前，仓库维护者必须逐项验证：
 
-1. GitHub 主仓库名称为 `gaixianggeng/mimi-remote`，且 Visibility 为 **Public**；
-2. 创建 `gaixianggeng/homebrew-tap`，且 Visibility 为 **Public**，保证 Homebrew 用户不需 GitHub 认证；
-3. 在主仓库配置可写 tap 的 `TAP_GITHUB_TOKEN`；
-4. 先让 Go CI、iOS CI、Codex Protocol Drift 在 PR 上真实通过；
-5. 再创建 `v*` tag。
+1. `gaixianggeng/mimi-remote` 只包含后端白名单快照和全新 Git 历史，Visibility 为 **Public**；
+2. 私有 `gaixianggeng/codex-ipad-agent` 继续承载 iOS 源码和完整开发历史；
+3. `gaixianggeng/homebrew-tap` 为 **Public**，保证 Homebrew 用户不需 GitHub 认证；
+4. 主仓库 `TAP_DEPLOY_KEY` 只对应 Tap 的可写 Deploy Key，不复用维护者 PAT；
+5. Go CI、公开安全门禁和 Codex Protocol Drift 在公开仓库真实通过后，再创建 `v*` tag。
 
-Release workflow 已加入前置闸门：它通过 GitHub API JSON 验证目标仓库名、主仓库与 Tap 均为 PUBLIC，并验证 `TAP_GITHUB_TOKEN` 的 push 权限；任一条件未准备好时，会在创建半成品 Release 前停止。本地可运行 `bash ./scripts/check-release-prerequisites.sh --self-test` 验证 JSON 判定逻辑，不访问 GitHub。
+Release workflow 已加入前置闸门：它通过 GitHub API JSON 验证目标仓库名、主仓库与 Tap 均为 PUBLIC，再使用 Deploy Key 对 Tap `main` 执行 dry-run push 验证写权限；任一条件未准备好时，会在创建半成品 Release 前停止。本地可运行 `bash ./scripts/check-release-prerequisites.sh --self-test` 验证 JSON 判定逻辑，不访问 GitHub。
 
-2026-07-14 的只读外部审计结果：当前 Git remote 仍指向私有的 `gaixianggeng/codex-ipad-agent`；目标主仓库与 `homebrew-tap` 尚不存在，当前仓库也没有 `TAP_GITHUB_TOKEN`，新增 Go/iOS/协议门禁尚未进入远端 workflow。以上是正式发布的真实外部阻断，不能用本地测试结果替代。
+2026-07-14 已完成外部资源创建：Public 后端仓库和 Public Tap 均已建立，Tap 可写 Deploy Key 已通过 dry-run push 验证。私有仓库不会改为 Public，避免历史提交泄露 iOS 源码。剩余发布门禁是公开仓库 Actions 全绿和首个 tag 发布验证；真机网络与交互验收由维护者后续手动执行，不阻塞后端源码公开。
 
 ### 本地验收
 
@@ -83,7 +83,7 @@ bash ./scripts/verify-release.sh
 - GoReleaser 已显式固定 `release.github=gaixianggeng/mimi-remote`，因此本地 Git remote 仍是历史仓库名时，快照 Formula 也必须生成新仓库 URL；产物门禁会拒绝任何旧 `codex-ipad-agent` 下载地址。
 - 同 tag 重跑会替换已有同名附件，只能用于“同 tag、同提交”的 Release/tap 部分失败恢复；如果 tag 被移动，必须停止而不是覆盖公开产物。
 - 当前 Homebrew Formula 仍使用 GoReleaser 已弃用的 `brews` 生成器；首个版本先保持已经验证的安装方式，后续再单独迁移 `homebrew_casks` 并验证 `brew services` 替代方案。
-- Homebrew tap 和 GitHub 仓库重命名是外部状态，不能通过当前工作树修改自动完成。
+- 私有完整仓库到公开后端仓库使用固定白名单单向导出；禁止把私有仓库历史直接推到 Public，也不手工维护两套后端源码。
 - Tailscale HTTP 的 ATS 与应用层边界已经收窄，但 App Store 公开发布前仍需要用真机验证 Tailscale IP、后台切换和弱网恢复。
 - 弱网诊断只保留内存中最近 80 条握手失败和连接结束样本，服务重启后清空；APP 的离线恢复已有确定性测试，但仍需真机验收，不替代长期日志或云端监控。
 - Worktree 无人值守自动删除、任意 Shell、MCP/OAuth 配置写入仍属于高风险能力。当前 Worktree 只提供可解释候选和人工确认，不增加后台 ticker；多个 checkout 无法形成文件系统事务，极端外部竞争导致部分完成时必须依赖结构化 `deleted_paths/failed_path` 恢复 UI 状态。

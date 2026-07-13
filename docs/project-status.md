@@ -8,6 +8,8 @@
 
 Mimi Remote 的目标是让 iPhone / iPad 安全连接用户自己的 Mac，在明确授权的工作区内远程使用 Codex。项目保持单机优先：不建设云端账号系统，不把代码、Codex 凭证或完整会话托管到开发者服务器。
 
+仓库边界已经拆分：`gaixianggeng/mimi-remote` 使用全新 Git 历史公开 Go 后端、安装脚本和后端文档；`gaixianggeng/codex-ipad-agent` 保持 Private，继续承载 iOS 源码和完整开发历史。后端通过固定白名单脚本从私有主开发仓库单向导出，禁止把包含 iOS 历史的仓库直接改为 Public。
+
 ## 方案
 
 ### 当前生产链路

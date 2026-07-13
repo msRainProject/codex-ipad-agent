@@ -4,7 +4,7 @@
 
 本文件随 Mimi Remote 源码、`agentd` 发布压缩包和 iOS App 一起分发，用于保留直接依赖及其已解析依赖的版权声明、NOTICE 和许可证正文。
 
-依赖版本以 `go.mod`、`go.sum` 和 `ios/MimiRemote/MimiRemote.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved` 为准。测试依赖不会进入正式 App 运行时，但仍在这里保留声明，方便源码分发和审计。
+Go 依赖版本以 `go.mod`、`go.sum` 为准；源码树包含 iOS 客户端时，其依赖版本再以 `ios/MimiRemote/MimiRemote.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved` 为准。测试依赖不会进入正式运行时，但仍在这里保留声明，方便源码分发和审计。
 
 ## 依赖清单
 

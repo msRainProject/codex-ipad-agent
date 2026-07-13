@@ -15,7 +15,7 @@ on:
       - "scripts/verify-release.sh"
       - "README.md"
       - "docs/install-upgrade-rollback.md"
-      - "docs/p0-p1-roadmap.md"
+      - "docs/codex-protocol-support.md"
       - ".github/workflows/go-ci.yml"
       - ".github/workflows/release.yml"
   push:
@@ -34,7 +34,7 @@ on:
       - "scripts/verify-release.sh"
       - "README.md"
       - "docs/install-upgrade-rollback.md"
-      - "docs/p0-p1-roadmap.md"
+      - "docs/codex-protocol-support.md"
       - ".github/workflows/go-ci.yml"
       - ".github/workflows/release.yml"
   workflow_dispatch:
