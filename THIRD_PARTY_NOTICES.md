@@ -10,12 +10,12 @@ Go 依赖版本以 `go.mod`、`go.sum` 为准；源码树包含 iOS 客户端时
 
 | 依赖 | 版本 | 使用范围 |
 | --- | --- | --- |
-| `Go standard library/runtime` | `go1.23.2` | Go 运行时 |
+| `Go standard library/runtime` | `go1.25.0` | Go 运行时 |
 | `github.com/creack/pty` | `v1.1.24` | Go 运行时 |
 | `github.com/gorilla/websocket` | `v1.5.3` | Go 运行时 |
 | `github.com/skip2/go-qrcode` | `v0.0.0-20200617195104-da1b6568686e` | Go 运行时 |
-| `golang.org/x/image` | `v0.30.0` | Go 运行时 |
-| `golang.org/x/text` | `v0.28.0` | Go 间接依赖（未编入当前 `agentd`） |
+| `golang.org/x/image` | `v0.41.0` | Go 运行时 |
+| `golang.org/x/text` | `v0.37.0` | Go 间接依赖（未编入当前 `agentd`） |
 | `swift-markdown` | `0.8.0` | iOS 运行时 |
 | `swift-markdown NOTICE` | `0.8.0` | iOS 运行时归属声明 |
 | `swift-cmark` | `0.8.0` | iOS 运行时 |
@@ -26,12 +26,12 @@ Go 依赖版本以 `go.mod`、`go.sum` 为准；源码树包含 iOS 客户端时
 
 ## 许可证正文
 
-### Go standard library/runtime go1.23.2
+### Go standard library/runtime go1.25.0
 
 使用范围：Go 运行时
 
 ```text
-Copyright (c) 2009 The Go Authors. All rights reserved.
+Copyright 2009 The Go Authors.
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are
@@ -43,7 +43,7 @@ notice, this list of conditions and the following disclaimer.
 copyright notice, this list of conditions and the following disclaimer
 in the documentation and/or other materials provided with the
 distribution.
-   * Neither the name of Google Inc. nor the names of its
+   * Neither the name of Google LLC nor the names of its
 contributors may be used to endorse or promote products derived from
 this software without specific prior written permission.
 
@@ -145,7 +145,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-### golang.org/x/image v0.30.0
+### golang.org/x/image v0.41.0
 
 使用范围：Go 运行时
 
@@ -179,7 +179,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-### golang.org/x/text v0.28.0
+### golang.org/x/text v0.37.0
 
 使用范围：Go 间接依赖（未编入当前 `agentd`）
 
