@@ -44,6 +44,10 @@ jobs:
       APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
       APP_STORE_CONNECT_API_KEY_PATH: ${{ vars.MIMI_ASC_API_KEY_PATH || '/Users/gaixiaotongxue/secure/AuthKey_6WL48ZRJB6.p8' }}
+      IOS_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_BASE64 }}
+      IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+      IOS_APPSTORE_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_APPSTORE_PROVISIONING_PROFILE_BASE64 }}
+      IOS_KEYCHAIN_PASSWORD: ${{ secrets.IOS_KEYCHAIN_PASSWORD }}
       XCODE_APP_PATH: ${{ inputs.xcode_path || '/Applications/Xcode-beta.app' }}
     steps:
       - uses: actions/checkout@v4
@@ -68,33 +72,80 @@ jobs:
           test -n "$APP_STORE_CONNECT_API_ISSUER_ID"
           test -f "$APP_STORE_CONNECT_API_KEY_PATH"
 
-          # 本机 runner 复用 login keychain 中的证书，不每次创建和遗留临时 keychain。
-          if ! security find-identity -v -p codesigning \
-            | grep -E '"(Apple|iPhone) Distribution:.*\('"$DEVELOPMENT_TEAM"'\)"'; then
-            echo "未找到团队 $DEVELOPMENT_TEAM 的 Distribution 签名证书" >&2
+      - name: 准备临时发布钥匙串
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/mimi-signing.keychain-db"
+          original_keychains="$RUNNER_TEMP/mimi-original-keychains.txt"
+          certificate="$RUNNER_TEMP/mimi-distribution.p12"
+          profile="$RUNNER_TEMP/mimi-appstore.mobileprovision"
+          profile_plist="$RUNNER_TEMP/mimi-appstore.plist"
+
+          # 先记录所有清理路径，确保中途失败时 always 步骤仍能恢复持久 runner。
+          {
+            echo "IOS_SIGNING_KEYCHAIN_PATH=$keychain"
+            echo "IOS_ORIGINAL_KEYCHAINS_FILE=$original_keychains"
+            echo "IOS_SIGNING_CERTIFICATE_PATH=$certificate"
+            echo "IOS_SIGNING_PROFILE_PATH=$profile"
+            echo "IOS_SIGNING_PROFILE_PLIST_PATH=$profile_plist"
+          } >> "$GITHUB_ENV"
+
+          security list-keychains -d user \
+            | sed -E 's/^[[:space:]]*"([^"]+)"[[:space:]]*$/\1/' \
+            > "$original_keychains"
+          ruby -rbase64 -e 'File.binwrite(ARGV[0], Base64.decode64(ENV.fetch("IOS_DISTRIBUTION_CERTIFICATE_BASE64")))' "$certificate"
+          ruby -rbase64 -e 'File.binwrite(ARGV[0], Base64.decode64(ENV.fetch("IOS_APPSTORE_PROVISIONING_PROFILE_BASE64")))' "$profile"
+
+          security delete-keychain "$keychain" 2>/dev/null || true
+          security create-keychain -p "$IOS_KEYCHAIN_PASSWORD" "$keychain"
+          security set-keychain-settings -lut 7200 "$keychain"
+          security unlock-keychain -p "$IOS_KEYCHAIN_PASSWORD" "$keychain"
+          security import "$certificate" \
+            -P "$IOS_DISTRIBUTION_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$keychain"
+          # 核心逻辑：显式授权 Apple 工具链访问私钥，避免后台 runner 在 CodeSign 时出现 errSecInternalComponent。
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s \
+            -k "$IOS_KEYCHAIN_PASSWORD" \
+            "$keychain"
+
+          original_search_list=()
+          while IFS= read -r keychain_path; do
+            if [[ -n "$keychain_path" && "$keychain_path" != "$keychain" ]]; then
+              original_search_list+=("$keychain_path")
+            fi
+          done < "$original_keychains"
+          # 临时 keychain 排在最前，但保留登录与系统 keychain，避免影响同机其他构建。
+          security list-keychains -d user -s "$keychain" "${original_search_list[@]}"
+
+          signing_identity="$(
+            security find-identity -v -p codesigning "$keychain" \
+              | sed -nE 's/.*"((Apple|iPhone) Distribution:[^"]+)".*/\1/p' \
+              | head -n 1
+          )"
+          if [[ -z "$signing_identity" || "$signing_identity" != *"($DEVELOPMENT_TEAM)" ]]; then
+            echo "临时 keychain 中没有团队 $DEVELOPMENT_TEAM 的 Distribution 签名身份" >&2
             exit 1
           fi
 
-          # 按 bundle id 动态查找已安装的 App Store profile，避免续期后绑定旧 UUID。
-          profile_plist="$RUNNER_TEMP/mimi-installed-profile.plist"
-          profile_name=""
-          shopt -s nullglob
-          for profile in "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision; do
-            security cms -D -i "$profile" > "$profile_plist" 2>/dev/null || continue
-            application_identifier="$(plutil -extract Entitlements.application-identifier raw -o - "$profile_plist" 2>/dev/null || true)"
-            # App Store profile 不包含 ProvisionedDevices，避免误选开发或 Ad Hoc profile。
-            if [[ "$application_identifier" == "$DEVELOPMENT_TEAM.$IOS_BUNDLE_ID" ]] \
-              && ! plutil -extract ProvisionedDevices xml1 -o - "$profile_plist" >/dev/null 2>&1; then
-              profile_name="$(plutil -extract Name raw -o - "$profile_plist")"
-              break
-            fi
-          done
-          rm -f "$profile_plist"
-          if [[ -z "$profile_name" ]]; then
-            echo "未找到 $IOS_BUNDLE_ID 的 App Store provisioning profile" >&2
+          security cms -D -i "$profile" > "$profile_plist"
+          application_identifier="$(plutil -extract Entitlements.application-identifier raw -o - "$profile_plist")"
+          if [[ "$application_identifier" != "$DEVELOPMENT_TEAM.$IOS_BUNDLE_ID" ]] \
+            || plutil -extract ProvisionedDevices xml1 -o - "$profile_plist" >/dev/null 2>&1; then
+            echo "Provisioning profile 不是 $IOS_BUNDLE_ID 的 App Store profile" >&2
             exit 1
           fi
-          echo "IOS_PROVISIONING_PROFILE_SPECIFIER=$profile_name" >> "$GITHUB_ENV"
+          profile_uuid="$(plutil -extract UUID raw -o - "$profile_plist")"
+          profile_name="$(plutil -extract Name raw -o - "$profile_plist")"
+          installed_profile="$HOME/Library/MobileDevice/Provisioning Profiles/$profile_uuid.mobileprovision"
+          mkdir -p "$(dirname "$installed_profile")"
+          cp "$profile" "$installed_profile"
+          {
+            echo "IOS_CODE_SIGN_IDENTITY=$signing_identity"
+            echo "IOS_PROVISIONING_PROFILE_SPECIFIER=$profile_name"
+            echo "IOS_INSTALLED_PROFILE_PATH=$installed_profile"
+          } >> "$GITHUB_ENV"
 
       - name: 归档并导出 IPA
         run: |
@@ -133,8 +184,9 @@ jobs:
             MARKETING_VERSION="$marketing_version" \
             CURRENT_PROJECT_VERSION="$build_number" \
             CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY='Apple Distribution' \
+            CODE_SIGN_IDENTITY="$IOS_CODE_SIGN_IDENTITY" \
             PROVISIONING_PROFILE_SPECIFIER="$IOS_PROVISIONING_PROFILE_SPECIFIER" \
+            OTHER_CODE_SIGN_FLAGS="--keychain $IOS_SIGNING_KEYCHAIN_PATH" \
             -quiet
           xcodebuild -exportArchive \
             -archivePath "$archive" \
@@ -165,8 +217,35 @@ jobs:
       - name: 清理本地构建产物
         if: ${{ always() }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          cleanup_status=0
+
+          # 核心逻辑：先恢复任务前的搜索列表，再删除临时 keychain，不能给持久 runner 留下失效路径。
+          original_keychains="${IOS_ORIGINAL_KEYCHAINS_FILE:-$RUNNER_TEMP/mimi-original-keychains.txt}"
+          if [[ -f "$original_keychains" ]]; then
+            original_search_list=()
+            while IFS= read -r keychain_path; do
+              [[ -n "$keychain_path" ]] && original_search_list+=("$keychain_path")
+            done < "$original_keychains"
+            if (( ${#original_search_list[@]} > 0 )); then
+              security list-keychains -d user -s "${original_search_list[@]}" || cleanup_status=1
+            else
+              echo "原始 keychain 搜索列表为空，拒绝覆盖当前列表" >&2
+              cleanup_status=1
+            fi
+          fi
+
+          security delete-keychain \
+            "${IOS_SIGNING_KEYCHAIN_PATH:-$RUNNER_TEMP/mimi-signing.keychain-db}" \
+            2>/dev/null || true
+          rm -f \
+            "${IOS_INSTALLED_PROFILE_PATH:-}" \
+            "${IOS_SIGNING_CERTIFICATE_PATH:-$RUNNER_TEMP/mimi-distribution.p12}" \
+            "${IOS_SIGNING_PROFILE_PATH:-$RUNNER_TEMP/mimi-appstore.mobileprovision}" \
+            "${IOS_SIGNING_PROFILE_PLIST_PATH:-$RUNNER_TEMP/mimi-appstore.plist}" \
+            "$original_keychains"
           # 只删除本次在 RUNNER_TEMP 中生成的目录，避免持久机磁盘累积。
           if [[ -n "${IOS_OUTPUT_PATH:-}" && "$IOS_OUTPUT_PATH" == "$RUNNER_TEMP"/mimi-* ]]; then
             rm -rf "$IOS_OUTPUT_PATH"
           fi
+          exit "$cleanup_status"
