@@ -514,7 +514,7 @@ struct UnifiedWorkbenchShell: View {
         return false
     }
 
-    /// 工具栏使用单层圆形底，不再叠加系统 glass 的外圈；在浅色和深色主题下都和列表操作一致。
+    /// 工具栏使用单层圆形底；非激活态沿用主题的次级表面，避免浅色模式下纯白按钮压过暖灰导航栏。
     private func workbenchToolbarIconButton(
         systemImage: String,
         accessibilityLabel: String,
@@ -529,7 +529,7 @@ struct UnifiedWorkbenchShell: View {
                 .symbolRenderingMode(.hierarchical)
                 .frame(width: 34, height: 34)
                 .background(
-                    isActive ? tokens.selectionFill : tokens.surface.opacity(0.72),
+                    isActive ? tokens.selectionFill : tokens.elevatedSurface.opacity(0.58),
                     in: Circle()
                 )
                 .overlay {

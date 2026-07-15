@@ -461,7 +461,8 @@ struct ConversationImagePreview: View {
         image
             .resizable()
             .scaledToFit()
-            .frame(maxWidth: .infinity, maxHeight: maxHeight, alignment: .leading)
+            // 高度只负责限制长图；宽度跟随缩放后的图片，避免描边被撑满消息气泡。
+            .frame(maxHeight: maxHeight, alignment: .leading)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)

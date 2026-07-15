@@ -58,7 +58,7 @@ final class ConversationSnapshotTests: XCTestCase {
         )
 
         let sessionStore = SessionStore(
-            appStore: AppStore(),
+            appStore: makeSnapshotAppStore(),
             conversationStore: conversationStore,
             logStore: LogStore()
         )
@@ -114,7 +114,7 @@ final class ConversationSnapshotTests: XCTestCase {
         )
 
         let sessionStore = SessionStore(
-            appStore: AppStore(),
+            appStore: makeSnapshotAppStore(),
             conversationStore: conversationStore,
             logStore: LogStore()
         )
@@ -146,7 +146,7 @@ final class ConversationSnapshotTests: XCTestCase {
         let conversationStore = ConversationStore()
         let themeStore = makeThemeStore()
         let sessionStore = SessionStore(
-            appStore: AppStore(),
+            appStore: makeSnapshotAppStore(),
             conversationStore: conversationStore,
             logStore: LogStore()
         )
@@ -235,13 +235,14 @@ final class ConversationSnapshotTests: XCTestCase {
             fallbackSessionID: sessionID
         )
         let themeStore = makeThemeStore()
+        let appStore = makeSnapshotAppStore()
         let sessionStore = SessionStore(
-            appStore: AppStore(),
+            appStore: appStore,
             conversationStore: conversationStore,
             logStore: LogStore(),
             recentWorkspaceStore: makeRecentWorkspaceStore(
                 workspaces: [AgentWorkspace(project: project, lastOpenedAt: Date(timeIntervalSince1970: 10))],
-                endpoint: AppStore().endpoint
+                endpoint: appStore.endpoint
             ),
             clientFactory: {
                 SnapshotSessionAPIClient(projects: [project], sessions: [session])
@@ -263,7 +264,7 @@ final class ConversationSnapshotTests: XCTestCase {
     func testProjectSessionDashboard() async {
         let project = AgentProject(id: "mimi-remote", name: "mimi-remote", path: "/Users/me/code/mimi-remote")
         let themeStore = makeThemeStore()
-        let appStore = AppStore()
+        let appStore = makeSnapshotAppStore()
         let sessions = [
             makeSnapshotSession(
                 id: "running",
@@ -401,6 +402,14 @@ final class ConversationSnapshotTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         return ThemeStore(defaults: defaults)
+    }
+
+    /// 快照不能读取模拟器里真实配对过的 Mac；隔离偏好与 Keychain 后，composer 的默认状态才可复现。
+    private func makeSnapshotAppStore() -> AppStore {
+        let suiteName = "ConversationSnapshotTests.AppStore.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        return AppStore(defaults: defaults, tokenStore: TokenStore(keychain: TestKeychainOperations()))
     }
 
     private func makeRecentWorkspaceStore(workspaces: [AgentWorkspace], endpoint: String) -> RecentWorkspaceStore {

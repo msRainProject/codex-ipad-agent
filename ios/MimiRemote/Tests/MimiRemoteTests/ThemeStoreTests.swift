@@ -408,8 +408,8 @@ final class ResponsiveLayoutTests: XCTestCase {
     func testConversationLayoutFitsPhonePortraitWidth() {
         let layout = ConversationLayout(containerWidth: 390, horizontalSizeClass: .compact)
 
-        XCTAssertEqual(layout.horizontalInset, 12)
-        XCTAssertEqual(layout.composerAvailableWidth, 366)
+        XCTAssertEqual(layout.horizontalInset, 16)
+        XCTAssertEqual(layout.composerAvailableWidth, 358)
         XCTAssertEqual(layout.composerMaxWidth, .infinity)
         XCTAssertEqual(layout.composerBottomPadding, 8)
         XCTAssertLessThanOrEqual(layout.userBubbleMaxWidth, 354)
