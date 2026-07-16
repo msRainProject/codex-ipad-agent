@@ -14,6 +14,9 @@ struct DiffPanelView: View {
     @State private var pullRequestTitle = ""
     @State private var pullRequestBody = ""
     @State private var reviewComments: [GitReviewComment] = []
+    @State private var lastGeneratedCommitMessage = ""
+    @State private var isShowingQuickPublishConfirmation = false
+    @State private var isShowingTestFlightConfirmation = false
 
     var body: some View {
         let tokens = themeStore.tokens(for: colorScheme)
@@ -79,7 +82,45 @@ struct DiffPanelView: View {
             }
         }
         .task(id: sessionStore.selectedGitStatusPath) {
+            commitMessage = ""
+            lastGeneratedCommitMessage = ""
             await sessionStore.refreshSelectedGitStatus()
+            updateCommitMessageSuggestion(force: true)
+            await sessionStore.refreshSelectedGitTestFlightStatus()
+        }
+        .task(id: sessionStore.selectedGitTestFlightStatus?.job?.id) {
+            guard sessionStore.selectedGitTestFlightStatus?.job?.isRunning == true else {
+                return
+            }
+            await sessionStore.pollSelectedGitTestFlightRelease()
+        }
+        .onChange(of: sessionStore.selectedGitStatus) { _, status in
+            guard status?.hasChanges == true else {
+                return
+            }
+            updateCommitMessageSuggestion(force: false)
+        }
+        .confirmationDialog("提交并推送？", isPresented: $isShowingQuickPublishConfirmation, titleVisibility: .visible) {
+            Button(sessionStore.selectedGitStatus?.hasChanges == true ? "提交并推送" : "推送当前分支") {
+                let message = quickPublishMessage
+                Task {
+                    _ = await sessionStore.quickPublishSelectedGitChanges(message: message)
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(quickPublishConfirmationMessage)
+        }
+        .confirmationDialog("发布 TestFlight？", isPresented: $isShowingTestFlightConfirmation, titleVisibility: .visible) {
+            Button("在主机发布 TestFlight") {
+                let whatToTest = testFlightWhatToTest
+                Task {
+                    _ = await sessionStore.startSelectedGitTestFlightRelease(whatToTest: whatToTest)
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将在主机执行已通过预检的 git testflight-push。它会核对远端 commit，并使用主机本地的签名与 App Store Connect 配置完成内部发布。")
         }
         .confirmationDialog("撤销工作区改动？", isPresented: $isShowingRevertConfirmation, titleVisibility: .visible) {
             if let file = pendingRevertFile {
@@ -138,10 +179,6 @@ struct DiffPanelView: View {
                     ContentUnavailableView("当前工作区不是 Git 仓库", systemImage: "folder")
                         .font(themeStore.uiFont(.caption))
                         .padding(.top, 48)
-                } else if !status.hasChanges && fileChangeItems.isEmpty {
-                    ContentUnavailableView("暂无文件变更", systemImage: "doc.text.magnifyingglass")
-                        .font(themeStore.uiFont(.caption))
-                        .padding(.top, 48)
                 } else {
                     InspectorSummaryCard(
                         symbolName: "checklist",
@@ -149,6 +186,23 @@ struct DiffPanelView: View {
                         subtitle: gitSummarySubtitle(status),
                         tint: tokens.accent,
                         lineLimit: nil
+                    )
+                    GitQuickPublishBox(
+                        message: $commitMessage,
+                        status: status,
+                        testFlightStatus: sessionStore.selectedGitTestFlightStatus,
+                        testFlightError: sessionStore.selectedGitTestFlightErrorMessage,
+                        isWorking: gitControlIsWorking,
+                        isRefreshingTestFlight: sessionStore.isRefreshingGitTestFlightStatus,
+                        onRegenerateMessage: {
+                            updateCommitMessageSuggestion(force: true)
+                        },
+                        onQuickPublish: {
+                            isShowingQuickPublishConfirmation = true
+                        },
+                        onTestFlight: {
+                            isShowingTestFlightConfirmation = true
+                        }
                     )
                     GitPublishBox(
                         title: $pullRequestTitle,
@@ -175,6 +229,11 @@ struct DiffPanelView: View {
                             appendReviewNotesToPullRequestBody()
                         }
                     )
+                    if !status.hasChanges && fileChangeItems.isEmpty {
+                        ContentUnavailableView("暂无文件变更", systemImage: "doc.text.magnifyingglass")
+                            .font(themeStore.uiFont(.caption))
+                            .padding(.vertical, 16)
+                    }
                     if !status.files.isEmpty {
                         GitFileStatusList(
                             files: status.files,
@@ -288,6 +347,8 @@ struct DiffPanelView: View {
             || sessionStore.isRunningGitAction
             || sessionStore.isCommittingGitChanges
             || sessionStore.isPushingGitBranch
+            || sessionStore.isQuickPublishingGitChanges
+            || sessionStore.isStartingGitTestFlightRelease
             || sessionStore.isCreatingPullRequest
             || sessionStore.isRefreshingPullRequestStatus
     }
@@ -354,6 +415,41 @@ struct DiffPanelView: View {
             return statusText
         }
         return "工作区干净"
+    }
+
+    private var quickPublishConfirmationMessage: String {
+        guard let status = sessionStore.selectedGitStatus else {
+            return "将普通推送当前分支，不会执行 force push。"
+        }
+        if status.hasChanges {
+            return "将暂存当前工作区的 \(status.files.count) 个文件，使用“\(quickPublishMessage)”提交，然后普通推送到 origin/\(status.branch ?? "当前分支")。"
+        }
+        return "当前工作区没有待提交变更，将普通推送到 origin/\(status.branch ?? "当前分支")，不会执行 force push。"
+    }
+
+    private var testFlightWhatToTest: String {
+        let current = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !current.isEmpty {
+            return current
+        }
+        return sessionStore.selectedGitQuickPublishResult?.message ?? ""
+    }
+
+    private var quickPublishMessage: String {
+        let current = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        return current.isEmpty ? "chore: 同步当前分支" : current
+    }
+
+    private func updateCommitMessageSuggestion(force: Bool) {
+        guard let status = sessionStore.selectedGitStatus, status.hasChanges else {
+            return
+        }
+        let next = GitCommitMessageSuggestion.make(from: status)
+        let current = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        if force || current.isEmpty || current == lastGeneratedCommitMessage {
+            commitMessage = next
+        }
+        lastGeneratedCommitMessage = next
     }
 
     private func nonEmpty(_ value: String?) -> String? {

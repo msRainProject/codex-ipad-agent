@@ -70,29 +70,31 @@ struct ModelReasoningGridPicker: View {
     @State private var isDragging = false
     @State private var gestureRevision = 0
 
-    private let rowLabelWidth: CGFloat = 82
-    private let gridHeight: CGFloat = 228
+    // 每个格子仍保留 44pt 以上触控高度，但整体收窄，避免浮层盖住过多会话内容。
+    private let pickerWidth: CGFloat = 408
+    private let rowLabelWidth: CGFloat = 68
+    private let gridHeight: CGFloat = 174
 
     var body: some View {
         let tokens = themeStore.tokens(for: colorScheme)
         let rows = GPT56ModelGridCatalog.rows(from: options)
 
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 10) {
             header(tokens: tokens)
             columnLabels(tokens: tokens)
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 rowLabels(rows: rows, tokens: tokens)
                 grid(rows: rows, tokens: tokens)
             }
-            HStack(spacing: 6) {
-                Image(systemName: "hand.draw")
-                Text("在九宫格内滑动，同时切换模型与推理强度")
+            HStack(spacing: 5) {
+                Image(systemName: "hand.tap")
+                Text("点按或滑动选择")
             }
-            .font(themeStore.uiFont(.caption))
-            .foregroundStyle(tokens.secondaryText)
+            .font(themeStore.uiFont(.caption2, weight: .medium))
+            .foregroundStyle(tokens.tertiaryText)
         }
-        .padding(16)
-        .frame(width: 470)
+        .padding(14)
+        .frame(width: pickerWidth)
         .background(tokens.surface)
         .onChange(of: selection) { _, _ in
             guard dragPoint == nil else { return }
@@ -101,16 +103,16 @@ struct ModelReasoningGridPicker: View {
     }
 
     private func header(tokens: ThemeTokens) -> some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("GPT-5.6")
-                    .font(themeStore.uiFont(.headline, weight: .semibold))
-                    .foregroundStyle(tokens.primaryText)
-                Text("模型 × 推理强度")
-                    .font(themeStore.uiFont(.caption))
-                    .foregroundStyle(tokens.secondaryText)
-            }
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text("GPT-5.6")
+                .font(themeStore.uiFont(.headline, weight: .semibold))
+                .foregroundStyle(tokens.primaryText)
+            Text("模型 × 推理强度")
+                .font(themeStore.uiFont(.caption))
+                .foregroundStyle(tokens.secondaryText)
+
             Spacer()
+
             Menu {
                 Button {
                     onSelectModelOnly(nil)
@@ -130,17 +132,28 @@ struct ModelReasoningGridPicker: View {
                 }
                 .disabled(isRefreshing)
             } label: {
-                Label("全部模型", systemImage: "chevron.right")
-                    .font(themeStore.uiFont(.caption, weight: .semibold))
+                HStack(spacing: 4) {
+                    Text("全部模型")
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(themeStore.uiFont(size: 9, weight: .bold))
+                }
+                .font(themeStore.uiFont(.caption, weight: .semibold))
+                .foregroundStyle(tokens.accent)
+                .padding(.horizontal, 9)
+                .frame(height: 28)
+                .background(tokens.elevatedSurface.opacity(0.72), in: Capsule())
+                .overlay {
+                    Capsule()
+                        .strokeBorder(tokens.border.opacity(0.58), lineWidth: 0.75)
+                }
             }
             .menuStyle(.button)
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            .buttonStyle(.plain)
         }
     }
 
     private func columnLabels(tokens: ThemeTokens) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Color.clear.frame(width: rowLabelWidth, height: 1)
             HStack(spacing: 0) {
                 ForEach(GPT56ModelGridCatalog.efforts) { effort in
@@ -158,7 +171,7 @@ struct ModelReasoningGridPicker: View {
             ForEach(rows) { option in
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(GPT56ModelGridCatalog.shortTitle(for: option.model))
-                        .font(themeStore.uiFont(.callout, weight: .semibold))
+                        .font(themeStore.uiFont(.subheadline, weight: .semibold))
                         .foregroundStyle(activeSelection.modelID == option.model ? tokens.accent : tokens.primaryText)
                     Text(GPT56ModelGridCatalog.detail(for: option.model))
                         .font(themeStore.uiFont(size: 9, weight: .medium))
@@ -178,12 +191,8 @@ struct ModelReasoningGridPicker: View {
             let cellSize = CGSize(width: size.width / 3, height: size.height / 3)
 
             ZStack {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(reduceTransparency ? tokens.elevatedSurface : Color.clear)
-                if !reduceTransparency {
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .fill(.ultraThinMaterial)
-                }
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(tokens.elevatedSurface.opacity(reduceTransparency ? 1 : 0.56))
 
                 gridLines(size: size, tokens: tokens)
 
@@ -209,10 +218,11 @@ struct ModelReasoningGridPicker: View {
                     .allowsHitTesting(false)
             }
             .overlay {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(tokens.border.opacity(0.9), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(tokens.border.opacity(0.72), lineWidth: 0.75)
             }
-            .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .simultaneousGesture(dragGesture(rows: rows, size: size))
         }
         .frame(height: gridHeight)
@@ -235,13 +245,13 @@ struct ModelReasoningGridPicker: View {
         } label: {
             ZStack {
                 if selected {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(tokens.accent.opacity(0.09))
-                        .padding(6)
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(tokens.accent.opacity(0.055))
+                        .padding(4)
                 }
                 Circle()
                     .fill(selected ? tokens.accent.opacity(0.28) : tokens.tertiaryText.opacity(supported ? 0.32 : 0.12))
-                    .frame(width: selected ? 12 : 8, height: selected ? 12 : 8)
+                    .frame(width: selected ? 8 : 6, height: selected ? 8 : 6)
             }
             .contentShape(Rectangle())
         }
@@ -265,29 +275,29 @@ struct ModelReasoningGridPicker: View {
                 path.addLine(to: CGPoint(x: size.width, y: y))
             }
         }
-        .stroke(tokens.border.opacity(0.72), lineWidth: 1)
+        .stroke(tokens.border.opacity(0.46), lineWidth: 0.75)
     }
 
     private func selectionLens(tokens: ThemeTokens) -> some View {
         ZStack {
             Circle()
-                .fill(tokens.accent.opacity(0.16))
-                .frame(width: 50, height: 50)
-                .blur(radius: 5)
+                .fill(tokens.accent.opacity(0.13))
+                .frame(width: 38, height: 38)
+                .blur(radius: 4)
             Circle()
                 .fill(tokens.accent.gradient)
-                .frame(width: 34, height: 34)
+                .frame(width: 26, height: 26)
                 .overlay {
-                    Circle().strokeBorder(Color.white.opacity(0.62), lineWidth: 1.5)
+                    Circle().strokeBorder(Color.white.opacity(0.58), lineWidth: 1)
                 }
-                .shadow(color: tokens.accent.opacity(0.38), radius: 9, y: 3)
+                .shadow(color: tokens.accent.opacity(0.28), radius: 5, y: 2)
             Circle()
                 .fill(Color.white.opacity(0.48))
-                .frame(width: 6, height: 6)
-                .offset(x: -7, y: -7)
+                .frame(width: 4, height: 4)
+                .offset(x: -5, y: -5)
         }
-        .scaleEffect(!isDragging || reduceMotion ? 1 : 1.08)
-        .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.22, dampingFraction: 0.8), value: isDragging)
+        .scaleEffect(!isDragging || reduceMotion ? 1 : 1.06)
+        .animation(reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.22, dampingFraction: 1), value: isDragging)
     }
 
     private func dragGesture(rows: [CodexAppServerModelOption], size: CGSize) -> some Gesture {

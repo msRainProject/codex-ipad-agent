@@ -59,6 +59,9 @@ type Router struct {
 	managedWorktreeCleanupDelete  managedWorktreeCleanupDeleteFunc
 	managedWorktreePendingUses    map[string]int
 	managedWorktreeRegistryRemove func(string) error
+	// TestFlight 发布会持续数分钟，使用内存任务保存当前进度，避免让移动端 HTTP 请求长时间挂起。
+	gitTestFlightMu   sync.Mutex
+	gitTestFlightJobs map[string]*gitTestFlightReleaseJob
 }
 
 func NewRouter(cfg config.Config, registry *projects.Registry, manager *session.Manager, checker *doctor.Checker, version string) http.Handler {
@@ -85,6 +88,7 @@ func NewRouterWithRuntime(cfg config.Config, registry *projects.Registry, manage
 		managedWorktrees:            map[string]managedWorktree{},
 		managedWorktreeCleanupPlans: map[string]worktreeCleanupPlan{},
 		managedWorktreePendingUses:  map[string]int{},
+		gitTestFlightJobs:           map[string]*gitTestFlightReleaseJob{},
 		pairingClaims:               map[string]time.Time{},
 	}
 	r.refreshClaudeBridgeProbe(false)
@@ -121,6 +125,9 @@ func NewRouterWithRuntime(cfg config.Config, registry *projects.Registry, manage
 	mux.Handle("/api/git/action", r.auth.Middleware(http.HandlerFunc(r.gitActionHandler)))
 	mux.Handle("/api/git/commit", r.auth.Middleware(http.HandlerFunc(r.gitCommitHandler)))
 	mux.Handle("/api/git/push", r.auth.Middleware(http.HandlerFunc(r.gitPushHandler)))
+	mux.Handle("/api/git/quick-publish", r.auth.Middleware(http.HandlerFunc(r.gitQuickPublishHandler)))
+	mux.Handle("/api/git/testflight/status", r.auth.Middleware(http.HandlerFunc(r.gitTestFlightStatusHandler)))
+	mux.Handle("/api/git/testflight/run", r.auth.Middleware(http.HandlerFunc(r.gitTestFlightRunHandler)))
 	mux.Handle("/api/git/pull-request", r.auth.Middleware(http.HandlerFunc(r.gitPullRequestHandler)))
 	mux.Handle("/api/git/pull-request/status", r.auth.Middleware(http.HandlerFunc(r.gitPullRequestStatusHandler)))
 	mux.Handle("/api/voice/transcribe", r.auth.Middleware(http.HandlerFunc(r.voiceTranscribeHandler)))

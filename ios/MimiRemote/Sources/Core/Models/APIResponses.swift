@@ -1137,6 +1137,29 @@ struct GitPushRequest: Encodable {
     let remote: String?
 }
 
+struct GitQuickPublishRequest: Encodable {
+    let path: String
+    let message: String
+    let remote: String?
+    let confirmed: Bool
+}
+
+struct GitTestFlightStatusRequest: Encodable {
+    let path: String
+}
+
+struct GitTestFlightRunRequest: Encodable {
+    let path: String
+    let whatToTest: String
+    let confirmed: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case path
+        case whatToTest = "what_to_test"
+        case confirmed
+    }
+}
+
 struct GitPullRequestRequest: Encodable {
     let path: String
     let title: String
@@ -1154,6 +1177,61 @@ struct GitPushResponse: Codable, Hashable {
     let branch: String
     let output: String?
     let status: GitStatusResponse
+}
+
+struct GitQuickPublishResponse: Codable, Hashable {
+    let path: String
+    let remote: String
+    let branch: String
+    let message: String
+    let committed: Bool
+    let output: String?
+    let status: GitStatusResponse
+}
+
+struct GitTestFlightCapability: Codable, Hashable {
+    let isIOSProject: Bool
+    let available: Bool
+    let reason: String
+    let projectID: String?
+    let command: String?
+
+    enum CodingKeys: String, CodingKey {
+        case isIOSProject = "is_ios_project"
+        case available
+        case reason
+        case projectID = "project_id"
+        case command
+    }
+}
+
+struct GitTestFlightJob: Codable, Hashable {
+    let id: String
+    let state: String
+    let output: String?
+    let truncated: Bool?
+    let exitCode: Int?
+    let startedAt: String
+    let finishedAt: String?
+
+    var isRunning: Bool { state == "running" }
+    var succeeded: Bool { state == "succeeded" }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case state
+        case output
+        case truncated
+        case exitCode = "exit_code"
+        case startedAt = "started_at"
+        case finishedAt = "finished_at"
+    }
+}
+
+struct GitTestFlightStatusResponse: Codable, Hashable {
+    let path: String
+    let capability: GitTestFlightCapability
+    let job: GitTestFlightJob?
 }
 
 struct GitPullRequestResponse: Codable, Hashable {

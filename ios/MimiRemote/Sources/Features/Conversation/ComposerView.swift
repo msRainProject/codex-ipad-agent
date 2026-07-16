@@ -454,7 +454,10 @@ struct ComposerView: View {
     }
 
     private var isCompactComposer: Bool {
-        horizontalSizeClass == .compact || (availableWidth.map { $0 < 560 } ?? false)
+        ConversationLayout.usesCompactComposerToolbar(
+            availableWidth: availableWidth,
+            horizontalSizeClass: horizontalSizeClass
+        )
     }
 
     @ViewBuilder

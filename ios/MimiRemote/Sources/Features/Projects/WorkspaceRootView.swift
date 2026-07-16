@@ -40,6 +40,9 @@ enum WorkspaceSessionRuntimeChoice: String, CaseIterable, Identifiable {
 
 enum WorkspaceStripLayout {
     static let horizontalPadding: CGFloat = 24
+    // 316pt 能给路径、状态和两组统计留下稳定空间，同时在 iPad 上仍能露出相邻卡片，提示可横向滚动。
+    static let cardWidth: CGFloat = 316
+    static let stripHeight: CGFloat = 166
 
     static func minimumContentWidth(viewportWidth: CGFloat) -> CGFloat {
         max(0, viewportWidth - horizontalPadding * 2)
@@ -266,7 +269,7 @@ struct WorkspaceRootView: View {
                                     isSelected: false,
                                     tokens: tokens
                                 ) {}
-                                .frame(width: 300)
+                                .frame(width: WorkspaceStripLayout.cardWidth)
                                 .redacted(reason: .placeholder)
                             }
                         } else {
@@ -282,7 +285,7 @@ struct WorkspaceRootView: View {
                                     // 工作区页面只更新本地浏览选择，避免切换卡片时意外改变当前会话上下文。
                                     selectedWorkspaceID = project.id
                                 }
-                                .frame(width: 300)
+                                .frame(width: WorkspaceStripLayout.cardWidth)
                                 .id(project.id)
                             }
                         }
@@ -297,7 +300,7 @@ struct WorkspaceRootView: View {
                     .padding(.vertical, 14)
                 }
             }
-            .frame(height: 150)
+            .frame(height: WorkspaceStripLayout.stripHeight)
             .onChange(of: selectedWorkspaceID) { _, selectedID in
                 guard let selectedID else { return }
                 withAnimation(.easeInOut(duration: 0.22)) {
@@ -483,7 +486,7 @@ private struct WorkspaceLibraryCard: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top, spacing: 12) {
                     Image(systemName: isUnavailable ? "folder.badge.questionmark" : "folder.fill")
                         .font(themeStore.uiFont(size: 22, weight: .semibold))
@@ -492,7 +495,7 @@ private struct WorkspaceLibraryCard: View {
                         .frame(width: 44, height: 44)
                         .background((isUnavailable ? tokens.warning : tokens.primaryAction).opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 5) {
                         Text(project.name)
                             .font(themeStore.uiFont(.headline, weight: .semibold))
                             .foregroundStyle(tokens.primaryText)
@@ -505,22 +508,29 @@ private struct WorkspaceLibraryCard: View {
                     }
 
                     Spacer(minLength: 8)
-                    Image(systemName: isSelected ? "checkmark.circle.fill" : "chevron.down")
-                        .font(themeStore.uiFont(.caption, weight: .semibold))
-                        .foregroundStyle(isSelected ? tokens.primaryAction : tokens.tertiaryText)
+
+                    VStack(alignment: .trailing, spacing: 8) {
+                        Image(systemName: isSelected ? "checkmark.circle.fill" : "chevron.down")
+                            .font(themeStore.uiFont(.caption, weight: .semibold))
+                            .foregroundStyle(isSelected ? tokens.primaryAction : tokens.tertiaryText)
+
+                        Label(
+                            isUnavailable ? "需重试" : "可访问",
+                            systemImage: isUnavailable ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
+                        )
+                        .font(themeStore.uiFont(.caption2, weight: .semibold))
+                        .foregroundStyle(isUnavailable ? tokens.warning : tokens.success)
+                        .fixedSize()
+                    }
                 }
 
                 HStack(spacing: 8) {
                     metric("\(sessionCount)", title: "会话", systemImage: "bubble.left.and.bubble.right")
                     metric("\(worktreeCount)", title: "Worktree", systemImage: "arrow.triangle.branch")
-                    Spacer(minLength: 0)
-                    Label(isUnavailable ? "需要重试" : "可访问", systemImage: isUnavailable ? "exclamationmark.triangle" : "checkmark.circle.fill")
-                        .font(themeStore.uiFont(.caption, weight: .semibold))
-                        .foregroundStyle(isUnavailable ? tokens.warning : tokens.success)
                 }
             }
             .padding(14)
-            .frame(maxWidth: .infinity, minHeight: 118, alignment: .topLeading)
+            .frame(maxWidth: .infinity, minHeight: 132, alignment: .topLeading)
             .background(isSelected ? tokens.selectionFill : tokens.surface.opacity(0.72), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -531,16 +541,34 @@ private struct WorkspaceLibraryCard: View {
             }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("工作区 \(project.name)，\(sessionCount) 个会话\(isSelected ? "，已选择" : "")")
+        .accessibilityLabel(
+            "工作区 \(project.name)，\(sessionCount) 个会话，\(worktreeCount) 个 Worktree，\(isUnavailable ? "需要重试" : "可访问")\(isSelected ? "，已选择" : "")"
+        )
     }
 
     private func metric(_ value: String, title: String, systemImage: String) -> some View {
-        Label("\(value) \(title)", systemImage: systemImage)
-            .font(themeStore.uiFont(.caption, weight: .medium))
-            .foregroundStyle(tokens.secondaryText)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(tokens.elevatedSurface.opacity(0.66), in: Capsule())
+        HStack(spacing: 9) {
+            Image(systemName: systemImage)
+                .font(themeStore.uiFont(size: 15, weight: .semibold))
+                .foregroundStyle(tokens.primaryAction)
+                .frame(width: 28, height: 28)
+                .background(tokens.primaryAction.opacity(0.10), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 0) {
+                Text(value)
+                    .font(themeStore.uiFont(.subheadline, weight: .semibold))
+                    .foregroundStyle(tokens.primaryText)
+                Text(title)
+                    .font(themeStore.uiFont(.caption2, weight: .medium))
+                    .foregroundStyle(tokens.secondaryText)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        .background(tokens.elevatedSurface.opacity(0.56), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
@@ -549,6 +577,7 @@ private struct WorkspaceDetailView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ScaledMetric(relativeTo: .body) private var actionButtonHeight: CGFloat = 68
 
     let recentSessions: [AgentSession]
     let sessionLoadState: WorkspaceSessionLoadState
@@ -605,6 +634,7 @@ private struct WorkspaceDetailView: View {
             LazyVGrid(columns: actionColumns, spacing: 12) {
                 actionButton(
                     title: "在会话中打开",
+                    subtitle: "查看该工作区的全部会话",
                     systemImage: "bubble.left.and.bubble.right",
                     emphasis: .secondary,
                     tokens: tokens,
@@ -613,6 +643,7 @@ private struct WorkspaceDetailView: View {
 
                 actionButton(
                     title: isShownInSessions ? "从会话侧栏隐藏" : "显示在会话侧栏",
+                    subtitle: isShownInSessions ? "当前可从会话侧栏进入" : "方便从会话侧栏快速进入",
                     systemImage: isShownInSessions ? "eye.slash" : "eye",
                     emphasis: .secondary,
                     tokens: tokens,
@@ -643,15 +674,15 @@ private struct WorkspaceDetailView: View {
         let foreground = actionForeground(emphasis: emphasis, tokens: tokens)
         let background = actionBackground(emphasis: emphasis, tokens: tokens)
         let border = actionBorder(emphasis: emphasis, tokens: tokens)
-        let cornerRadius: CGFloat = emphasis == .secondary ? 12 : 16
+        let cornerRadius: CGFloat = 15
 
         return Button(action: action) {
             HStack(spacing: 12) {
                 Image(systemName: systemImage)
-                    .font(themeStore.uiFont(size: emphasis == .secondary ? 17 : 19, weight: .semibold))
+                    .font(themeStore.uiFont(size: 17, weight: .semibold))
                     .symbolRenderingMode(.hierarchical)
                     .foregroundStyle(foreground)
-                    .frame(width: emphasis == .secondary ? 34 : 40, height: emphasis == .secondary ? 34 : 40)
+                    .frame(width: 38, height: 38)
                     .background(actionIconBackground(emphasis: emphasis, tokens: tokens), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 3) {
@@ -671,7 +702,8 @@ private struct WorkspaceDetailView: View {
                 Spacer(minLength: 8)
             }
             .padding(.horizontal, 14)
-            .frame(maxWidth: .infinity, minHeight: emphasis == .secondary ? 52 : 72, alignment: .leading)
+            // 所有快捷入口共用同一个随 Dynamic Type 缩放的高度，视觉和触控面积保持一致。
+            .frame(maxWidth: .infinity, minHeight: actionButtonHeight, maxHeight: actionButtonHeight, alignment: .leading)
             .background(background, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)

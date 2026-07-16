@@ -25,7 +25,12 @@ struct ConversationView: View {
         )
 
         GeometryReader { proxy in
-            let layout = ConversationLayout(containerWidth: proxy.size.width, horizontalSizeClass: horizontalSizeClass)
+            let layout = ConversationLayout(
+                containerWidth: proxy.size.width,
+                horizontalSizeClass: horizontalSizeClass,
+                safeAreaInsets: proxy.safeAreaInsets
+            )
+            let composerWidth = min(layout.composerAvailableWidth, layout.composerMaxWidth)
 
             VStack(spacing: 0) {
                 topStatusStrip(model: model, layout: layout)
@@ -35,10 +40,11 @@ struct ConversationView: View {
                 HStack {
                     Spacer(minLength: 0)
                     ComposerView(
-                        availableWidth: min(layout.composerAvailableWidth, layout.composerMaxWidth),
+                        availableWidth: composerWidth,
                         initialGoalStatusExpanded: initialGoalStatusExpanded
                     )
-                        .frame(maxWidth: layout.composerMaxWidth)
+                        // 确定宽度阻止固定尺寸的工具按钮反向撑大输入卡和上方目标栏。
+                        .frame(width: composerWidth)
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, layout.horizontalInset)

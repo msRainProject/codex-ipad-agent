@@ -116,6 +116,9 @@ protocol SessionStoreAPIClient {
     func gitPatchAction(path: String, action: GitActionKind, patch: String) async throws -> GitStatusResponse
     func gitCommit(path: String, message: String) async throws -> GitStatusResponse
     func gitPush(path: String, remote: String?) async throws -> GitPushResponse
+    func gitQuickPublish(path: String, message: String, remote: String?, confirmed: Bool) async throws -> GitQuickPublishResponse
+    func gitTestFlightStatus(path: String) async throws -> GitTestFlightStatusResponse
+    func gitTestFlightRun(path: String, whatToTest: String, confirmed: Bool) async throws -> GitTestFlightStatusResponse
     func gitCreatePullRequest(path: String, title: String, body: String, draft: Bool) async throws -> GitPullRequestResponse
     func gitPullRequestStatus(path: String) async throws -> GitPullRequestStatusResponse
     func transcribeVoice(filename: String, contentType: String, audioData: Data, language: String?, prompt: String?) async throws -> VoiceTranscriptionResponse
@@ -289,6 +292,21 @@ extension SessionStoreAPIClient {
 
     func gitPush(path: String, remote: String?) async throws -> GitPushResponse {
         // 默认实现只服务于不直连 agentd 的测试替身；真实 client 会覆写并请求 /api/git/push。
+        throw AgentAPIError.invalidResponse
+    }
+
+    func gitQuickPublish(path: String, message: String, remote: String?, confirmed: Bool) async throws -> GitQuickPublishResponse {
+        // 快捷发布涉及 stage、commit 和 push，测试替身默认不执行任何写操作。
+        throw AgentAPIError.invalidResponse
+    }
+
+    func gitTestFlightStatus(path: String) async throws -> GitTestFlightStatusResponse {
+        // TestFlight 能力必须由主机预检，客户端不能根据文件名自行推断。
+        throw AgentAPIError.invalidResponse
+    }
+
+    func gitTestFlightRun(path: String, whatToTest: String, confirmed: Bool) async throws -> GitTestFlightStatusResponse {
+        // TestFlight 是外部发布动作，默认替身不执行。
         throw AgentAPIError.invalidResponse
     }
 
@@ -1267,6 +1285,12 @@ final class SessionStore: ObservableObject {
     @Published private(set) var isRunningGitAction = false
     @Published private(set) var isCommittingGitChanges = false
     @Published private(set) var isPushingGitBranch = false
+    @Published private(set) var isQuickPublishingGitChanges = false
+    @Published private(set) var gitQuickPublishResultByPath: [String: GitQuickPublishResponse] = [:]
+    @Published private(set) var gitTestFlightStatusByPath: [String: GitTestFlightStatusResponse] = [:]
+    @Published private(set) var gitTestFlightErrorByPath: [String: String] = [:]
+    @Published private(set) var isRefreshingGitTestFlightStatus = false
+    @Published private(set) var isStartingGitTestFlightRelease = false
     @Published private(set) var isCreatingPullRequest = false
     @Published private(set) var pullRequestURLByPath: [String: String] = [:]
     @Published private(set) var pullRequestStatusByPath: [String: GitPullRequestStatusResponse] = [:]
@@ -2033,6 +2057,27 @@ final class SessionStore: ObservableObject {
             return nil
         }
         return gitActionErrorByPath[path]
+    }
+
+    var selectedGitQuickPublishResult: GitQuickPublishResponse? {
+        guard let path = selectedGitStatusPath else {
+            return nil
+        }
+        return gitQuickPublishResultByPath[path]
+    }
+
+    var selectedGitTestFlightStatus: GitTestFlightStatusResponse? {
+        guard let path = selectedGitStatusPath else {
+            return nil
+        }
+        return gitTestFlightStatusByPath[path]
+    }
+
+    var selectedGitTestFlightErrorMessage: String? {
+        guard let path = selectedGitStatusPath else {
+            return nil
+        }
+        return gitTestFlightErrorByPath[path]
     }
 
     var selectedPullRequestURL: String? {
@@ -3514,6 +3559,123 @@ final class SessionStore: ObservableObject {
             gitActionErrorByPath.removeValue(forKey: targetPath)
         } catch {
             gitActionErrorByPath[targetPath] = error.localizedDescription
+        }
+    }
+
+    @discardableResult
+    func quickPublishSelectedGitChanges(message: String, remote: String? = nil) async -> Bool {
+        guard let path = selectedGitStatusPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !path.isEmpty
+        else {
+            return false
+        }
+        return await quickPublishGitChanges(path: path, message: message, remote: remote)
+    }
+
+    @discardableResult
+    func quickPublishGitChanges(path: String, message: String, remote: String? = nil) async -> Bool {
+        let targetPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        let commitMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        let targetRemote = remote?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !targetPath.isEmpty, !commitMessage.isEmpty else {
+            return false
+        }
+
+        isQuickPublishingGitChanges = true
+        defer { isQuickPublishingGitChanges = false }
+        do {
+            let response = try await clientFactory().gitQuickPublish(
+                path: targetPath,
+                message: commitMessage,
+                remote: targetRemote?.isEmpty == true ? nil : targetRemote,
+                confirmed: true
+            )
+            gitQuickPublishResultByPath[targetPath] = response
+            gitStatusByPath[targetPath] = response.status
+            gitStatusErrorByPath.removeValue(forKey: targetPath)
+            gitActionErrorByPath.removeValue(forKey: targetPath)
+            await refreshGitTestFlightStatus(path: targetPath)
+            return true
+        } catch {
+            gitActionErrorByPath[targetPath] = error.localizedDescription
+            // 组合动作可能已经完成本地 commit 但在 push 阶段失败，失败后必须重新读取真实 Git 状态。
+            await refreshGitStatus(path: targetPath)
+            return false
+        }
+    }
+
+    func refreshSelectedGitTestFlightStatus() async {
+        guard let path = selectedGitStatusPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !path.isEmpty
+        else {
+            return
+        }
+        await refreshGitTestFlightStatus(path: path)
+    }
+
+    func refreshGitTestFlightStatus(path: String) async {
+        let targetPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !targetPath.isEmpty else {
+            return
+        }
+        isRefreshingGitTestFlightStatus = true
+        defer { isRefreshingGitTestFlightStatus = false }
+        do {
+            gitTestFlightStatusByPath[targetPath] = try await clientFactory().gitTestFlightStatus(path: targetPath)
+            gitTestFlightErrorByPath.removeValue(forKey: targetPath)
+        } catch {
+            gitTestFlightErrorByPath[targetPath] = error.localizedDescription
+        }
+    }
+
+    @discardableResult
+    func startSelectedGitTestFlightRelease(whatToTest: String) async -> Bool {
+        guard let path = selectedGitStatusPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !path.isEmpty
+        else {
+            return false
+        }
+        return await startGitTestFlightRelease(path: path, whatToTest: whatToTest)
+    }
+
+    @discardableResult
+    func startGitTestFlightRelease(path: String, whatToTest: String) async -> Bool {
+        let targetPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !targetPath.isEmpty else {
+            return false
+        }
+        isStartingGitTestFlightRelease = true
+        defer { isStartingGitTestFlightRelease = false }
+        do {
+            gitTestFlightStatusByPath[targetPath] = try await clientFactory().gitTestFlightRun(
+                path: targetPath,
+                whatToTest: whatToTest.trimmingCharacters(in: .whitespacesAndNewlines),
+                confirmed: true
+            )
+            gitTestFlightErrorByPath.removeValue(forKey: targetPath)
+            return true
+        } catch {
+            gitTestFlightErrorByPath[targetPath] = error.localizedDescription
+            return false
+        }
+    }
+
+    func pollSelectedGitTestFlightRelease() async {
+        guard let path = selectedGitStatusPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !path.isEmpty
+        else {
+            return
+        }
+        while !Task.isCancelled {
+            await refreshGitTestFlightStatus(path: path)
+            guard gitTestFlightStatusByPath[path]?.job?.isRunning == true else {
+                return
+            }
+            do {
+                try await Task.sleep(for: .seconds(2))
+            } catch {
+                return
+            }
         }
     }
 

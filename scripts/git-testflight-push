@@ -5,6 +5,7 @@ REMOTE_NAME="origin"
 TARGET_BRANCH=""
 WHATS_NEW=""
 FORCE_RELEASE=0
+CHECK_ONLY=0
 
 usage() {
   cat <<'USAGE'
@@ -16,6 +17,7 @@ Options:
   --branch NAME          目标分支，默认读取项目发布配置
   --what-to-test TEXT    TestFlight 测试说明，默认使用当前 commit 标题
   --force-release        即使当前 commit 已成功发布，也重新生成一个 build
+  --check                只检查当前仓库和本机发布配置，不推送、不上传
   -h, --help             显示帮助
 USAGE
 }
@@ -44,6 +46,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --force-release)
       FORCE_RELEASE=1
+      shift
+      ;;
+    --check)
+      CHECK_ONLY=1
       shift
       ;;
     -h|--help)
@@ -85,6 +91,15 @@ RUNNER="${IOS_TESTFLIGHT_LOCAL_RUNNER:-$REPO_ROOT/scripts/ios_testflight_local.s
 [[ -x "$RUNNER" ]] || fail "local TestFlight runner is not executable: $RUNNER"
 git -C "$REPO_ROOT" remote get-url "$REMOTE_NAME" >/dev/null \
   || fail "Git remote not found: $REMOTE_NAME"
+
+if [[ "$CHECK_ONLY" == "1" ]]; then
+  "$RUNNER" \
+    --repo "$REPO_ROOT" \
+    --check \
+    --ref "$RELEASE_COMMIT"
+  echo "git-testflight-push check ok: IOS_RELEASE_PROJECT_ID=$IOS_RELEASE_PROJECT_ID"
+  exit 0
+fi
 
 remote_sha() {
   git -C "$REPO_ROOT" ls-remote --heads "$REMOTE_NAME" "refs/heads/$TARGET_BRANCH" \

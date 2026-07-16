@@ -383,6 +383,29 @@ actor CodexAppServerSessionRuntime {
         try await AgentAPIClient(endpoint: endpoint, token: token).gitPush(path: path, remote: remote)
     }
 
+    func gitQuickPublish(path: String, message: String, remote: String?, confirmed: Bool) async throws -> GitQuickPublishResponse {
+        // 快捷发布固定走 agentd 的受限组合动作，客户端不直接拼接 Git 命令。
+        try await AgentAPIClient(endpoint: endpoint, token: token).gitQuickPublish(
+            path: path,
+            message: message,
+            remote: remote,
+            confirmed: confirmed
+        )
+    }
+
+    func gitTestFlightStatus(path: String) async throws -> GitTestFlightStatusResponse {
+        // 发布能力以主机本地预检为准，避免只看到 iOS 工程就错误开放按钮。
+        try await AgentAPIClient(endpoint: endpoint, token: token).gitTestFlightStatus(path: path)
+    }
+
+    func gitTestFlightRun(path: String, whatToTest: String, confirmed: Bool) async throws -> GitTestFlightStatusResponse {
+        try await AgentAPIClient(endpoint: endpoint, token: token).gitTestFlightRun(
+            path: path,
+            whatToTest: whatToTest,
+            confirmed: confirmed
+        )
+    }
+
     func gitCreatePullRequest(path: String, title: String, body: String, draft: Bool) async throws -> GitPullRequestResponse {
         // PR 通过本机已登录的 gh CLI 创建，iPad 不接触 GitHub token。
         try await AgentAPIClient(endpoint: endpoint, token: token).gitCreatePullRequest(path: path, title: title, body: body, draft: draft)
@@ -3790,6 +3813,18 @@ final class CodexAppServerSessionAPIClient: SessionStoreAPIClient {
         try await runtime.gitPush(path: path, remote: remote)
     }
 
+    func gitQuickPublish(path: String, message: String, remote: String?, confirmed: Bool) async throws -> GitQuickPublishResponse {
+        try await runtime.gitQuickPublish(path: path, message: message, remote: remote, confirmed: confirmed)
+    }
+
+    func gitTestFlightStatus(path: String) async throws -> GitTestFlightStatusResponse {
+        try await runtime.gitTestFlightStatus(path: path)
+    }
+
+    func gitTestFlightRun(path: String, whatToTest: String, confirmed: Bool) async throws -> GitTestFlightStatusResponse {
+        try await runtime.gitTestFlightRun(path: path, whatToTest: whatToTest, confirmed: confirmed)
+    }
+
     func gitCreatePullRequest(path: String, title: String, body: String, draft: Bool) async throws -> GitPullRequestResponse {
         try await runtime.gitCreatePullRequest(path: path, title: title, body: body, draft: draft)
     }
@@ -4027,6 +4062,9 @@ final class MultiRuntimeSessionAPIClient: SessionStoreAPIClient {
     func gitPatchAction(path: String, action: GitActionKind, patch: String) async throws -> GitStatusResponse { try await codexClient.gitPatchAction(path: path, action: action, patch: patch) }
     func gitCommit(path: String, message: String) async throws -> GitStatusResponse { try await codexClient.gitCommit(path: path, message: message) }
     func gitPush(path: String, remote: String?) async throws -> GitPushResponse { try await codexClient.gitPush(path: path, remote: remote) }
+    func gitQuickPublish(path: String, message: String, remote: String?, confirmed: Bool) async throws -> GitQuickPublishResponse { try await codexClient.gitQuickPublish(path: path, message: message, remote: remote, confirmed: confirmed) }
+    func gitTestFlightStatus(path: String) async throws -> GitTestFlightStatusResponse { try await codexClient.gitTestFlightStatus(path: path) }
+    func gitTestFlightRun(path: String, whatToTest: String, confirmed: Bool) async throws -> GitTestFlightStatusResponse { try await codexClient.gitTestFlightRun(path: path, whatToTest: whatToTest, confirmed: confirmed) }
     func gitCreatePullRequest(path: String, title: String, body: String, draft: Bool) async throws -> GitPullRequestResponse { try await codexClient.gitCreatePullRequest(path: path, title: title, body: body, draft: draft) }
     func gitPullRequestStatus(path: String) async throws -> GitPullRequestStatusResponse { try await codexClient.gitPullRequestStatus(path: path) }
     func transcribeVoice(filename: String, contentType: String, audioData: Data, language: String?, prompt: String?) async throws -> VoiceTranscriptionResponse {

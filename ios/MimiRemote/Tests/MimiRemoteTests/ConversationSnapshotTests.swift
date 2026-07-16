@@ -540,6 +540,49 @@ final class ConversationSnapshotTests: XCTestCase {
         )
     }
 
+    func testConversationLayoutUsesVisibleIPadSplitViewWidth() {
+        // iPad mini 横屏中 NavigationSplitView 可能把 1133pt 整窗宽度交给 detail，
+        // 同时以 300pt leading safe area 表达侧栏；composer 必须只消费剩余的 833pt。
+        let layout = ConversationLayout(
+            containerWidth: 1133,
+            horizontalSizeClass: .regular,
+            safeAreaInsets: EdgeInsets(top: 0, leading: 300, bottom: 0, trailing: 0)
+        )
+
+        XCTAssertEqual(layout.horizontalInset, 24)
+        XCTAssertEqual(layout.composerAvailableWidth, 785)
+        XCTAssertEqual(layout.composerMaxWidth, 785)
+        XCTAssertTrue(
+            ConversationLayout.usesCompactComposerToolbar(
+                availableWidth: layout.composerMaxWidth,
+                horizontalSizeClass: .regular
+            )
+        )
+        XCTAssertLessThanOrEqual(
+            layout.composerMaxWidth + layout.horizontalInset * 2,
+            833,
+            "输入卡和目标栏不能超过实际 detail 列宽"
+        )
+    }
+
+    func testConversationLayoutUsesCompactToolbarInIPadMiniPortrait() {
+        let layout = ConversationLayout(
+            containerWidth: 744,
+            horizontalSizeClass: .regular
+        )
+
+        XCTAssertEqual(layout.horizontalInset, 16)
+        XCTAssertEqual(layout.composerAvailableWidth, 712)
+        XCTAssertEqual(layout.composerMaxWidth, 712)
+        XCTAssertTrue(
+            ConversationLayout.usesCompactComposerToolbar(
+                availableWidth: layout.composerMaxWidth,
+                horizontalSizeClass: .regular
+            ),
+            "iPad mini 竖屏不能继续平铺完整工具栏"
+        )
+    }
+
     func testComposerStatusTrayCrowdedState() async {
         let view = await makeComposerStatusTrayCrowdedView(width: 1024, height: 768)
 
@@ -736,10 +779,12 @@ final class ConversationSnapshotTests: XCTestCase {
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
+            .frame(maxHeight: .infinity)
 
             // 直接渲染生产组件，避免 NavigationSplitView 在测试宿主中自动折叠侧栏。
             WorkbenchSidebarFooter(tokens: tokens, onOpenSettings: {}, onNewSession: {})
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .environmentObject(themeStore)
         .environment(\.colorScheme, .light)
         .background(tokens.sidebarBackground)

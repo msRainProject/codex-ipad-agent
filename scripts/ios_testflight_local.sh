@@ -13,7 +13,7 @@ LOCAL_RELEASE_MODE=""
 usage() {
   cat <<'USAGE'
 Usage:
-  ios_testflight_local.sh --dry-run|--upload [options]
+  ios_testflight_local.sh --check|--dry-run|--upload [options]
 
 Options:
   --repo PATH             Git 仓库路径，默认使用脚本所在仓库
@@ -21,6 +21,7 @@ Options:
   --secrets PATH          本机 Secrets 配置；默认由项目 ID 推导
   --ref REF               要验证或发布的 commit/ref，默认 HEAD
   --what-to-test TEXT     TestFlight 测试说明；上传模式必填
+  --check                 只检查仓库配置、Secrets 和本机依赖，不归档、不上传
   --dry-run               Archive、Export、Apple 服务端 Validate，不上传
   --upload                Archive、Export、上传并分发内部 TestFlight
   -h, --help              显示帮助
@@ -66,6 +67,32 @@ read_secret() {
   fail "$name, $file_name or $service_name is required"
 }
 
+check_secret() {
+  local name="$1"
+  local value="${!name:-}"
+  local file_name="${name}_FILE"
+  local file_path="${!file_name:-}"
+  local service_name="${name}_KEYCHAIN_SERVICE"
+  local service="${!service_name:-}"
+  local account_name="${name}_KEYCHAIN_ACCOUNT"
+  local account="${!account_name:-}"
+
+  [[ -z "$value" ]] || return 0
+  if [[ -n "$file_path" ]]; then
+    [[ -f "$file_path" ]] || fail "$file_name not found: $file_path"
+    return 0
+  fi
+  if [[ -n "$service" ]]; then
+    if [[ -n "$account" ]]; then
+      security find-generic-password -s "$service" -a "$account" >/dev/null
+    else
+      security find-generic-password -s "$service" >/dev/null
+    fi
+    return 0
+  fi
+  fail "$name, $file_name or $service_name is required"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo)
@@ -94,12 +121,17 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --dry-run)
-      [[ -z "$LOCAL_RELEASE_MODE" ]] || fail "choose exactly one of --dry-run or --upload"
+      [[ -z "$LOCAL_RELEASE_MODE" ]] || fail "choose exactly one of --check, --dry-run or --upload"
       LOCAL_RELEASE_MODE="dry-run"
       shift
       ;;
+    --check)
+      [[ -z "$LOCAL_RELEASE_MODE" ]] || fail "choose exactly one of --check, --dry-run or --upload"
+      LOCAL_RELEASE_MODE="check"
+      shift
+      ;;
     --upload)
-      [[ -z "$LOCAL_RELEASE_MODE" ]] || fail "choose exactly one of --dry-run or --upload"
+      [[ -z "$LOCAL_RELEASE_MODE" ]] || fail "choose exactly one of --check, --dry-run or --upload"
       LOCAL_RELEASE_MODE="upload"
       shift
       ;;
@@ -113,7 +145,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ -n "$LOCAL_RELEASE_MODE" ]] || fail "choose --dry-run or --upload"
+[[ -n "$LOCAL_RELEASE_MODE" ]] || fail "choose --check, --dry-run or --upload"
 REPO_ROOT="$(cd "$REPO_ROOT" && git rev-parse --show-toplevel)"
 release_commit="$(git -C "$REPO_ROOT" rev-parse --verify "$LOCAL_RELEASE_REF^{commit}")"
 PROJECT_CONFIG="${PROJECT_CONFIG:-$REPO_ROOT/config/release/ios-testflight.local.env}"
@@ -144,6 +176,8 @@ case "$IOS_RELEASE_ENTRYPOINT" in
     fail "IOS_RELEASE_ENTRYPOINT must stay inside the release worktree"
     ;;
 esac
+git -C "$REPO_ROOT" cat-file -e "$release_commit:$IOS_RELEASE_ENTRYPOINT" \
+  || fail "release entrypoint is not tracked in release ref: $IOS_RELEASE_ENTRYPOINT"
 
 if [[ -z "$SECRETS_CONFIG" ]]; then
   SECRETS_CONFIG="${IOS_RELEASE_SECRETS_FILE:-$HOME/.config/ios-testflight/$IOS_RELEASE_PROJECT_ID/secrets.env}"
@@ -158,13 +192,15 @@ set +a
 for name in APP_STORE_CONNECT_API_KEY_ID APP_STORE_CONNECT_API_ISSUER_ID APP_STORE_CONNECT_API_KEY_PATH IOS_DISTRIBUTION_CERTIFICATE_PATH; do
   require_env "$name"
 done
+check_secret IOS_DISTRIBUTION_CERTIFICATE_PASSWORD
+check_secret IOS_KEYCHAIN_PASSWORD
 [[ -f "$APP_STORE_CONNECT_API_KEY_PATH" ]] || fail "ASC private key not found: $APP_STORE_CONNECT_API_KEY_PATH"
 [[ -f "$IOS_DISTRIBUTION_CERTIFICATE_PATH" ]] || fail "distribution certificate not found: $IOS_DISTRIBUTION_CERTIFICATE_PATH"
 if [[ -z "${IOS_PROVISIONING_PROFILE_PATH:-}" && -z "${IOS_PROVISIONING_PROFILE_ID:-}" && -z "${IOS_PROVISIONING_PROFILE_NAME:-}" ]]; then
   fail "provide IOS_PROVISIONING_PROFILE_PATH, IOS_PROVISIONING_PROFILE_ID or IOS_PROVISIONING_PROFILE_NAME"
 fi
 
-for command in git security ruby plutil xcodebuild xcrun codesign tee; do
+for command in git security ruby plutil xcodebuild xcrun codesign tee caffeinate; do
   command -v "$command" >/dev/null 2>&1 || fail "missing command: $command"
 done
 
@@ -172,8 +208,8 @@ required_branch="${IOS_RELEASE_REQUIRED_BRANCH:-}"
 if [[ -n "$required_branch" ]]; then
   branch_ref="refs/heads/$required_branch"
   branch_commit="$(git -C "$REPO_ROOT" rev-parse --verify "$branch_ref^{commit}")"
-  if [[ "$LOCAL_RELEASE_MODE" == "upload" ]]; then
-    [[ "$release_commit" == "$branch_commit" ]] || fail "upload ref must equal local $required_branch tip"
+  if [[ "$LOCAL_RELEASE_MODE" == "upload" || "$LOCAL_RELEASE_MODE" == "check" ]]; then
+    [[ "$release_commit" == "$branch_commit" ]] || fail "upload/check ref must equal local $required_branch tip"
   else
     git -C "$REPO_ROOT" merge-base --is-ancestor "$branch_commit" "$release_commit" \
       || fail "dry-run ref must be based on local $required_branch tip"
@@ -189,6 +225,11 @@ if [[ -z "${TESTFLIGHT_WHATS_NEW:-}" ]]; then
   TESTFLIGHT_WHATS_NEW="本地校验：$(git -C "$REPO_ROOT" log -1 --format=%s "$release_commit")"
 fi
 export TESTFLIGHT_WHATS_NEW
+
+if [[ "$LOCAL_RELEASE_MODE" == "check" ]]; then
+  echo "ios-testflight-local check ok: project=$IOS_RELEASE_PROJECT_ID commit=$release_commit"
+  exit 0
+fi
 
 temp_base="${TMPDIR:-/tmp}"
 temp_base="${temp_base%/}"

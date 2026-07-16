@@ -744,8 +744,11 @@ Mimi TestFlight 不再使用 GitHub Actions。安装通用命令后，使用 `gi
 
 ```bash
 ./scripts/install_git_testflight_push.sh
+git testflight-push --check
 git testflight-push --what-to-test '验证 iPad 连接、项目、会话、日志和审批链路。'
 ```
+
+`--check` 只检查仓库发布配置、本机 Secrets、签名文件、Keychain 条目和命令依赖，不推送、不归档、不访问 Apple 上传接口。iOS 客户端“变更 → 快捷发布”也使用同一预检：只有主机检查通过且工作区已经提交时，才允许启动 TestFlight；发布在 `agentd` 后台执行，客户端轮询状态和受限日志。
 
 push 失败不会上传，同一 commit 发布成功后默认不会重复生成构建。ASC Key、Distribution P12 和密码只存在本机 `~/.config/ios-testflight/mimi/`。完整配置、dry-run 和恢复方式见 [本地自动发布 Mimi TestFlight](docs/local-testflight.md)。公开二进制、Go/iOS CI 和协议检查仍使用现有 GitHub workflows。
 

@@ -305,10 +305,16 @@ struct UnifiedWorkbenchShell: View {
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
             .environment(\.defaultMinListRowHeight, 38)
+            // 覆盖式侧栏可能只按 List 的理想内容高度提案；显式占用剩余空间后，
+            // 列表自身滚动，底部全局操作不会跟着短列表上浮。
+            .frame(maxHeight: .infinity)
 
             // 设置属于整个工作台而不是某个列表项，固定在侧栏底部可让顶部只保留品牌和当前内容。
             sidebarFooter(tokens: tokens, bottomSafeAreaInset: bottomSafeAreaInset)
         }
+        // NavigationSplitView 在 iPad 竖屏以 overlay 展开侧栏时不会保证内容采用整列理想高度，
+        // 根容器必须主动填满列高，Footer 才能稳定锚定到底部安全区。
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(tokens.sidebarBackground.ignoresSafeArea())
         .toolbar {
             ToolbarItem(placement: .principal) {

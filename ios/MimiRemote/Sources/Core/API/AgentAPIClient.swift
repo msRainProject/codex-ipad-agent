@@ -402,6 +402,30 @@ struct AgentAPIClient {
         return try await request(path: "/api/git/push", method: "POST", body: body)
     }
 
+    func gitQuickPublish(path: String, message: String, remote: String?, confirmed: Bool) async throws -> GitQuickPublishResponse {
+        let body = try JSONEncoder().encode(GitQuickPublishRequest(
+            path: path,
+            message: message,
+            remote: remote,
+            confirmed: confirmed
+        ))
+        return try await request(path: "/api/git/quick-publish", method: "POST", body: body, timeout: 90)
+    }
+
+    func gitTestFlightStatus(path: String) async throws -> GitTestFlightStatusResponse {
+        let body = try JSONEncoder().encode(GitTestFlightStatusRequest(path: path))
+        return try await request(path: "/api/git/testflight/status", method: "POST", body: body, timeout: 20)
+    }
+
+    func gitTestFlightRun(path: String, whatToTest: String, confirmed: Bool) async throws -> GitTestFlightStatusResponse {
+        let body = try JSONEncoder().encode(GitTestFlightRunRequest(
+            path: path,
+            whatToTest: whatToTest,
+            confirmed: confirmed
+        ))
+        return try await request(path: "/api/git/testflight/run", method: "POST", body: body, timeout: 20)
+    }
+
     func gitCreatePullRequest(path: String, title: String, body prBody: String, draft: Bool) async throws -> GitPullRequestResponse {
         let body = try JSONEncoder().encode(GitPullRequestRequest(path: path, title: title, body: prBody, draft: draft))
         return try await request(path: "/api/git/pull-request", method: "POST", body: body)
