@@ -87,6 +87,20 @@ struct SettingsView: View {
                 if appStore.isUsingLocalConnection {
                     LabeledContent("连接方式", value: "本机直连")
                 }
+                NavigationLink {
+                    ConnectionSpeedTestView()
+                } label: {
+                    HStack(spacing: 12) {
+                        Label("连接测速", systemImage: "bolt.horizontal.circle")
+                        Spacer(minLength: 12)
+                        Text(connectionSpeedTestSummary)
+                            .font(themeStore.uiFont(.callout))
+                            .monospacedDigit()
+                            .foregroundStyle(connectionSpeedTestTone(tokens: tokens))
+                            .lineLimit(1)
+                    }
+                }
+                .accessibilityIdentifier("settings.connectionSpeedTest")
                 if let termination = appStore.connectionTermination {
                     Label(termination.message, systemImage: "lock.trianglebadge.exclamationmark")
                         .font(.footnote)
@@ -98,12 +112,10 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Codex 用量") {
-                LabeledContent("账户", value: usage.displayName)
-                ForEach(usage.windows) { window in
-                    CodexUsageWindowRow(window: window, tint: tokens.accent)
-                }
-                LabeledContent("额度", value: usage.creditText)
+            Section {
+                CodexUsageSettingsCard(display: usage)
+            } header: {
+                Text("Codex 用量")
             }
 
             Section {
@@ -166,6 +178,29 @@ struct SettingsView: View {
             _ = await sessionStore.refreshAfterConnectionCommit(maxWait: 10)
         }
     }
+
+    private var connectionSpeedTestSummary: String {
+        if case .testing = appStore.connectionStatus {
+            return "测试中…"
+        }
+        if appStore.lastConnectionTestReport?.failedStage != nil {
+            return "测试失败"
+        }
+        guard let milliseconds = appStore.lastConnectionTestDurationMillis else {
+            return "未测试"
+        }
+        return AppStore.connectionTestDurationText(milliseconds: milliseconds)
+    }
+
+    private func connectionSpeedTestTone(tokens: ThemeTokens) -> Color {
+        if case .testing = appStore.connectionStatus {
+            return tokens.accent
+        }
+        if appStore.lastConnectionTestReport?.failedStage != nil {
+            return tokens.warning
+        }
+        return appStore.lastConnectionTestDurationMillis == nil ? tokens.secondaryText : tokens.success
+    }
 }
 
 private struct ConnectionManagementView: View {
@@ -184,31 +219,372 @@ private struct ConnectionManagementView: View {
     }
 }
 
-private struct CodexUsageWindowRow: View {
-    let window: CodexUsageWindowDisplay
-    let tint: Color
+private struct ConnectionSpeedTestView: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var appStore: AppStore
+    @EnvironmentObject private var themeStore: ThemeStore
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("\(window.label) \(window.title)")
-                Spacer()
-                Text(window.primaryText)
-                    .foregroundStyle(.secondary)
+        let tokens = themeStore.tokens(for: colorScheme)
+
+        Form {
+            Section {
+                HStack(alignment: .center, spacing: 12) {
+                    ZStack {
+                        Circle()
+                            .fill(resultTone(tokens: tokens).opacity(0.14))
+                        Image(systemName: resultSystemImage)
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(resultTone(tokens: tokens))
+                    }
+                    .frame(width: 44, height: 44)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(resultTitle)
+                            .font(themeStore.uiFont(.headline, weight: .semibold))
+                            .foregroundStyle(tokens.primaryText)
+                        Text(appStore.endpoint)
+                            .font(themeStore.uiFont(.caption))
+                            .foregroundStyle(tokens.secondaryText)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    if let milliseconds = appStore.lastConnectionTestDurationMillis {
+                        Text(AppStore.connectionTestDurationText(milliseconds: milliseconds))
+                            .font(themeStore.uiFont(.callout, weight: .semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(resultTone(tokens: tokens))
+                            .lineLimit(1)
+                    }
+                }
+
+                Button {
+                    Task {
+                        await appStore.testConnection(
+                            endpoint: appStore.endpoint,
+                            token: appStore.token
+                        )
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        if isTesting {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "bolt.horizontal.circle")
+                        }
+                        Text(isTesting ? "正在测速…" : appStore.lastConnectionTestReport == nil ? "开始测速" : "重新测速")
+                    }
+                    .font(themeStore.uiFont(.body, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!canRunTest)
+                .accessibilityIdentifier("settings.connectionSpeedTest.run")
+            } header: {
+                Text("当前连接")
+            } footer: {
+                Text(canRunTest || isTesting ? "依次检查 iPhone / iPad 到 Mac 助手、鉴权、Gateway 配置和 app-server 握手。" : "当前没有可用的连接凭据，请先返回 Mac 连接完成配对。")
             }
-            Gauge(value: window.progress ?? 0) {
-                EmptyView()
+
+            if let report = appStore.lastConnectionTestReport {
+                Section("测速结果") {
+                    LabeledContent("总耗时") {
+                        Text(AppStore.connectionTestDurationText(milliseconds: report.totalMillis))
+                            .monospacedDigit()
+                            .foregroundStyle(resultTone(tokens: tokens))
+                    }
+                    LabeledContent("测试时间", value: report.startedAt.formatted(date: .abbreviated, time: .shortened))
+                    if let failedStage = report.failedStage {
+                        LabeledContent("失败环节", value: failedStage.kind.title)
+                            .foregroundStyle(tokens.warning)
+                    } else if let slowestStage = report.slowestStage {
+                        LabeledContent("最慢环节") {
+                            Text("\(slowestStage.kind.title) · \(AppStore.connectionTestDurationText(milliseconds: slowestStage.durationMillis))")
+                                .monospacedDigit()
+                        }
+                    }
+                }
+
+                Section("分段耗时") {
+                    ForEach(report.stages) { stage in
+                        ConnectionSpeedTestStageRow(stage: stage)
+                    }
+                }
+
+                if let diagnostics = report.gatewayDiagnostics {
+                    Section("Gateway 观测") {
+                        if let connection = diagnostics.relatedConnection {
+                            ConnectionSpeedMetricRow(
+                                title: "Mac 上游拨号",
+                                value: AppStore.connectionTestDurationText(milliseconds: connection.upstreamDialMillis)
+                            )
+                        }
+                        if let rpc = diagnostics.latestRPC {
+                            ConnectionSpeedMetricRow(
+                                title: "最近 RPC",
+                                value: AppStore.connectionTestDurationText(milliseconds: rpc.latencyMillis)
+                            )
+                        }
+                        if diagnostics.writeBackMillisMax > 0 {
+                            ConnectionSpeedMetricRow(
+                                title: "写回设备",
+                                value: AppStore.connectionTestDurationText(milliseconds: diagnostics.writeBackMillisMax)
+                            )
+                        }
+                    }
+                }
             }
-            .gaugeStyle(.accessoryLinearCapacity)
-            .tint(tint)
-            Text("重置：\(window.resetText)")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+        }
+        .themedSettingsForm(tokens: tokens)
+        .frame(maxWidth: 720)
+        .frame(maxWidth: .infinity)
+        .background(tokens.background.ignoresSafeArea())
+        .navigationTitle("连接测速")
+        .tint(tokens.accent)
+    }
+
+    private var isTesting: Bool {
+        if case .testing = appStore.connectionStatus {
+            return true
+        }
+        return false
+    }
+
+    private var canRunTest: Bool {
+        appStore.isConfigured
+            && !isTesting
+            && !appStore.endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !appStore.token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var resultTitle: String {
+        if isTesting {
+            return "正在测试完整链路"
+        }
+        if appStore.lastConnectionTestReport?.failedStage != nil {
+            return "连接测试失败"
+        }
+        if appStore.lastConnectionTestReport != nil {
+            return "连接链路正常"
+        }
+        return appStore.isConfigured ? "可以开始测速" : "尚未连接 Mac"
+    }
+
+    private var resultSystemImage: String {
+        if isTesting {
+            return "timer"
+        }
+        if appStore.lastConnectionTestReport?.failedStage != nil {
+            return "exclamationmark.triangle.fill"
+        }
+        if appStore.lastConnectionTestReport != nil {
+            return "checkmark.circle.fill"
+        }
+        return "speedometer"
+    }
+
+    private func resultTone(tokens: ThemeTokens) -> Color {
+        if isTesting {
+            return tokens.accent
+        }
+        if appStore.lastConnectionTestReport?.failedStage != nil {
+            return tokens.warning
+        }
+        return appStore.lastConnectionTestReport == nil ? tokens.secondaryText : tokens.success
+    }
+}
+
+private struct ConnectionSpeedTestStageRow: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var themeStore: ThemeStore
+
+    let stage: ConnectionTestStageTiming
+
+    var body: some View {
+        let tokens = themeStore.tokens(for: colorScheme)
+
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: stage.status.isFailed ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
+                .foregroundStyle(stage.status.isFailed ? tokens.warning : tokens.success)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(stage.kind.title)
+                    .foregroundStyle(tokens.primaryText)
+                Text(stage.kind.detail)
+                    .font(themeStore.uiFont(.caption))
+                    .foregroundStyle(tokens.secondaryText)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            Text(AppStore.connectionTestDurationText(milliseconds: stage.durationMillis))
+                .font(themeStore.uiFont(.callout, weight: .medium))
+                .monospacedDigit()
+                .foregroundStyle(stage.status.isFailed ? tokens.warning : tokens.secondaryText)
+                .lineLimit(1)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(stage.kind.title)，\(stage.status.isFailed ? "失败" : "成功")")
+        .accessibilityValue(AppStore.connectionTestDurationText(milliseconds: stage.durationMillis))
+    }
+}
+
+private struct ConnectionSpeedMetricRow: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        LabeledContent(title) {
+            Text(value)
+                .monospacedDigit()
+        }
+    }
+}
+
+private struct CodexUsageSettingsCard: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @EnvironmentObject private var sessionStore: SessionStore
+    @EnvironmentObject private var themeStore: ThemeStore
+    @State private var isRefreshing = false
+
+    let display: CodexUsageWindowsDisplay
+
+    var body: some View {
+        let tokens = themeStore.tokens(for: colorScheme)
+
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                CodexUsageRingsGraphic(
+                    display: display,
+                    metrics: CodexUsageRingMetrics(isCompact: horizontalSizeClass == .compact)
+                )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(display.displayName)
+                        .font(themeStore.uiFont(.headline, weight: .semibold))
+                        .foregroundStyle(tokens.primaryText)
+                    Text(display.creditText)
+                        .font(themeStore.uiFont(.caption))
+                        .foregroundStyle(tokens.secondaryText)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+
+                Spacer(minLength: 8)
+
+                Button {
+                    Task { await refreshUsage() }
+                } label: {
+                    Group {
+                        if isRefreshing {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 14, weight: .semibold))
+                        }
+                    }
+                    .frame(width: 30, height: 30)
+                    .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(tokens.accent)
+                .disabled(isRefreshing)
+                .accessibilityLabel(isRefreshing ? "正在刷新 Codex 用量" : "刷新 Codex 用量")
+                .accessibilityIdentifier("settings.codexUsage.refresh")
+            }
+
+            if display.windows.isEmpty {
+                Text("刷新后显示 Codex 返回的账号窗口")
+                    .font(themeStore.uiFont(.caption))
+                    .foregroundStyle(tokens.secondaryText)
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 12) {
+                        ForEach(Array(display.windows.prefix(2).enumerated()), id: \.element.id) { index, window in
+                            if index > 0 {
+                                Divider()
+                            }
+                            CodexCompactUsageWindow(window: window)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(display.windows.prefix(2).enumerated()), id: \.element.id) { index, window in
+                            if index > 0 {
+                                Divider()
+                            }
+                            CodexCompactUsageWindow(window: window)
+                        }
+                    }
+                }
+            }
         }
         .padding(.vertical, 2)
+        .accessibilityElement(children: .contain)
+    }
+
+    @MainActor
+    private func refreshUsage() async {
+        guard !isRefreshing else {
+            return
+        }
+        isRefreshing = true
+        defer { isRefreshing = false }
+        await sessionStore.refreshCodexUsage()
+    }
+}
+
+private struct CodexCompactUsageWindow: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var themeStore: ThemeStore
+
+    let window: CodexUsageWindowDisplay
+
+    var body: some View {
+        let tokens = themeStore.tokens(for: colorScheme)
+        let tint = usageTint
+
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(tint)
+                    .frame(width: 7, height: 7)
+                Text("\(window.label) \(window.title)")
+                    .font(themeStore.uiFont(.caption, weight: .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(tokens.primaryText)
+            }
+
+            Text(window.remainingText)
+                .font(themeStore.uiFont(.callout, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(window.remainingProgress == nil ? tokens.secondaryText : tint)
+                .lineLimit(1)
+
+            Text(window.resetText)
+                .font(themeStore.uiFont(.caption2))
+                .foregroundStyle(tokens.secondaryText)
+                .lineLimit(1)
+                .minimumScaleFactor(0.76)
+        }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(window.accessibilityName)用量")
-        .accessibilityValue("\(window.primaryText)，\(window.resetText)")
+        .accessibilityLabel("\(window.accessibilityName)剩余用量")
+        .accessibilityValue("\(window.remainingText)，\(window.resetText)")
+    }
+
+    private var usageTint: Color {
+        if window.durationMinutes != nil {
+            return window.isDayScaleWindow ? .pink : .cyan
+        }
+        return window.kind == .secondary ? .pink : .cyan
     }
 }
 

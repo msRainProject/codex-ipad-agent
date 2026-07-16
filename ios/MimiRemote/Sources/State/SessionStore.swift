@@ -1364,6 +1364,7 @@ final class SessionStore: ObservableObject {
     private var sessionListFirstPageCacheByKey: [SessionListFirstPageRequestKey: SessionListFirstPageCacheEntry] = [:]
     private var sessionListCooldownUntilByBudgetKey: [SessionListBudgetKey: Date] = [:]
     private var sessionListReconciliationTasksByProjectID: [String: Task<Void, Never>] = [:]
+    private var lastSessionLibraryIndexRefreshAt: Date?
     private var sessionSearchTask: Task<Void, Never>?
     private var sessionSearchLoadMoreTask: Task<Void, Never>?
     private var sessionSearchGeneration = 0
@@ -1391,6 +1392,7 @@ final class SessionStore: ObservableObject {
     private let sessionListConnectedPollingDelayNanoseconds: UInt64 = 60_000_000_000
     private let sessionListDisconnectedPollingDelayNanoseconds: UInt64 = 8_000_000_000
     private let sessionListFirstPageCacheTTL: TimeInterval = 2
+    private let sessionLibraryIndexPollingInterval: TimeInterval = 60
     private let sessionListReconciliationDelayNanoseconds: UInt64 = 1_500_000_000
     private let economyHistoryPageLimit = 60
     private let fullHistoryPageLimit = 20
@@ -2087,6 +2089,16 @@ final class SessionStore: ObservableObject {
         Array(Self.sortedSessions(sessions.filter(isListableSession)).prefix(8))
     }
 
+    /// 进行中的任务不能被“最近 8 条”截断；侧栏始终展示当前已加载索引里的全部运行态。
+    var activeSessions: [AgentSession] {
+        Self.sortedSessions(sessions.filter { isListableSession($0) && $0.isRunning })
+    }
+
+    /// 历史区单独保留最近 8 条，避免运行任务占掉历史预览名额。
+    var recentHistorySessions: [AgentSession] {
+        Array(Self.sortedSessions(sessions.filter { isListableSession($0) && !$0.isRunning }).prefix(8))
+    }
+
     var filteredSidebarProjects: [AgentProject] {
         guard isSessionSearchActive else {
             return sidebarProjects
@@ -2182,13 +2194,15 @@ final class SessionStore: ObservableObject {
 
     func visibleSessions(forProjectID projectID: String) -> [AgentSession] {
         let sessions = sessions(forProjectID: projectID)
-        let limit = min(sessionVisibleLimit(forProjectID: projectID), sessions.count)
-        return Array(sessions.prefix(limit))
+        return Self.lifecycleVisibleSessions(
+            sessions,
+            limit: sessionVisibleLimit(forProjectID: projectID)
+        )
     }
 
     func hiddenSessionCount(forProjectID projectID: String) -> Int {
         let sessions = sessions(forProjectID: projectID)
-        return max(0, sessions.count - min(sessionVisibleLimit(forProjectID: projectID), sessions.count))
+        return max(0, sessions.count - visibleSessions(forProjectID: projectID).count)
     }
 
     func canLoadMoreSessions(projectID: String) -> Bool {
@@ -3895,11 +3909,12 @@ final class SessionStore: ObservableObject {
 #if DEBUG
         guard !isDebugWorkbenchUISeedActive else { return }
 #endif
-        // 全局“最近”最终只展示 8 条，但要得到正确的全局 Top 8，必须读取每个已打开工作区的
-        // 首屏候选；不能先截断工作区，否则较早打开的工作区即使刚有新会话也永远不会入选。
+        defer { lastSessionLibraryIndexRefreshAt = sessionListNow() }
+        // 全局“最近历史”最终只展示 8 条，但“进行中”不能沿用这个数量限制。
+        // 每个工作区读取标准 20 条轻量索引，不加载消息正文，在可见性和弱网成本间取 MVP 平衡。
         let workspaces = recentWorkspaces.filter { workspace in
             // 当前工作区已经由 refreshAll/轮询维护完整首屏时，会话库直接复用本地投影。
-            // 再用 limit=8 请求一次会和 limit=20 共用 gateway 预算，却无法命中 exact single-flight。
+            // 再发一次相同 thread/list 只会重复占用 gateway 预算。
             !(workspace.id == selectedProjectID && !sessions(forProjectID: workspace.id).isEmpty)
         }
         guard !workspaces.isEmpty else { return }
@@ -4057,7 +4072,16 @@ final class SessionStore: ObservableObject {
                 continue
             }
             await refreshSelectedProjectSessions(showLoading: false)
+            await refreshSessionLibraryIndexIfStale()
         }
+    }
+
+    private func refreshSessionLibraryIndexIfStale() async {
+        if let lastSessionLibraryIndexRefreshAt,
+           sessionListNow().timeIntervalSince(lastSessionLibraryIndexRefreshAt) < sessionLibraryIndexPollingInterval {
+            return
+        }
+        await refreshSessionLibraryIndex()
     }
 
     private func sessionListPollingDelayNanoseconds() -> UInt64 {
@@ -6529,7 +6553,7 @@ final class SessionStore: ObservableObject {
         do {
             let page = try await sessionListFirstPage(
                 workspace: workspace,
-                limit: 8,
+                limit: Self.initialSessionPageLimit,
                 reuseRecent: true
             )
             return (workspace, page)
@@ -7158,15 +7182,15 @@ final class SessionStore: ObservableObject {
         previews.reserveCapacity(grouped.count)
         hiddenCounts.reserveCapacity(grouped.count)
         for (projectID, projectSessions) in grouped {
-            let hiddenCount = max(0, projectSessions.count - Self.sessionPreviewLimit)
+            let visibleSessions = Self.lifecycleVisibleSessions(
+                projectSessions,
+                limit: Self.sessionPreviewLimit
+            )
+            let hiddenCount = max(0, projectSessions.count - visibleSessions.count)
             hiddenCounts[projectID] = hiddenCount
             // 侧栏每次 body 计算都会读取可见会话。像 Litter 的派生模型一样提前保存预览窗口，
             // 避免多个项目行在刷新时重复构造 prefix 数组。
-            if hiddenCount == 0 {
-                previews[projectID] = projectSessions
-            } else {
-                previews[projectID] = Array(projectSessions.prefix(Self.sessionPreviewLimit))
-            }
+            previews[projectID] = visibleSessions
         }
         previewSessionsByProjectID = previews
         hiddenSessionCountByProjectID = hiddenCounts
@@ -7192,7 +7216,7 @@ final class SessionStore: ObservableObject {
 
         let allSessions = baseSessions
         let visibleLimit = sessionVisibleLimit(forProjectID: projectID)
-        let visibleSessions = Array(allSessions.prefix(min(visibleLimit, allSessions.count)))
+        let visibleSessions = Self.lifecycleVisibleSessions(allSessions, limit: visibleLimit)
         let isShowingAll = visibleLimit > Self.sessionPreviewLimit
 
         return ProjectSessionListSnapshot(
@@ -7206,6 +7230,24 @@ final class SessionStore: ObservableObject {
             isLoadingMore: sessionPageLoadingTokenByProjectID[projectID] != nil,
             hasCollapsedPreview: allSessions.count > Self.sessionPreviewLimit
         )
+    }
+
+    /// 项目折叠时仍要完整保留运行态；历史会话只负责填满剩余预览位。
+    /// 这样即使排序被冻结、运行任务不在前三条，也不会被“显示更多”折叠掉。
+    private static func lifecycleVisibleSessions(
+        _ sessions: [AgentSession],
+        limit: Int
+    ) -> [AgentSession] {
+        let normalizedLimit = max(0, limit)
+        guard sessions.count > normalizedLimit else {
+            return sessions
+        }
+        let active = sessions.filter(\.isRunning)
+        guard !active.isEmpty else {
+            return Array(sessions.prefix(normalizedLimit))
+        }
+        let historyLimit = max(0, normalizedLimit - active.count)
+        return active + Array(sessions.lazy.filter { !$0.isRunning }.prefix(historyLimit))
     }
 
     private func rebuildProjectSessionListSnapshot(forProjectID projectID: String) {

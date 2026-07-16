@@ -870,6 +870,48 @@ final class ConversationDataFlowTests: XCTestCase {
         XCTAssertEqual(approvalSession.displayStatus(foregroundActivity: .receivingAssistant).title, "待审批")
     }
 
+    func testSessionListSeparatesActiveLifecycleFromHistory() {
+        let sessions = [
+            makeSession(
+                id: "running",
+                projectID: "project-1",
+                title: "正在执行",
+                status: SessionStatus.running.rawValue,
+                source: "codex"
+            ),
+            makeSession(
+                id: "approval",
+                projectID: "project-1",
+                title: "等待审批",
+                status: SessionStatus.waitingForApproval.rawValue,
+                source: "codex"
+            ),
+            makeSession(
+                id: "failed",
+                projectID: "project-1",
+                title: "执行失败",
+                status: SessionStatus.failed.rawValue,
+                source: "codex"
+            ),
+            makeSession(
+                id: "history",
+                projectID: "project-1",
+                title: "历史会话",
+                status: SessionStatus.history.rawValue,
+                source: "codex"
+            )
+        ]
+
+        let partition = SessionListPartition(sessions: sessions)
+
+        XCTAssertEqual(partition.active.map(\.id), ["running", "approval"])
+        XCTAssertEqual(partition.history.map(\.id), ["failed", "history"])
+        XCTAssertTrue(SessionLibraryStatusFilter.active.includes(sessions[1]))
+        XCTAssertTrue(SessionLibraryStatusFilter.needsAttention.includes(sessions[1]))
+        XCTAssertTrue(SessionLibraryStatusFilter.history.includes(sessions[2]))
+        XCTAssertTrue(SessionLibraryStatusFilter.needsAttention.includes(sessions[2]))
+    }
+
     func testConversationFileReferenceDetectorFindsPreviewableAbsolutePaths() {
         let text = """
         已生成：
@@ -7492,6 +7534,44 @@ final class ConversationDataFlowTests: XCTestCase {
         XCTAssertEqual(snapshot.visibleSessions.map(\.id), ["codex_0", "codex_1", "codex_2"])
     }
 
+    func testCollapsedProjectPreviewNeverHidesActiveSessionBehindHistory() async {
+        let project = makeProject(id: "proj_active_preview")
+        let history = (0..<4).map { index in
+            makeSession(
+                id: "history_\(index)",
+                projectID: project.id,
+                title: "历史 \(index)",
+                status: SessionStatus.history.rawValue,
+                source: "codex",
+                updatedAt: Date(timeIntervalSince1970: TimeInterval(100 - index))
+            )
+        }
+        let active = makeSession(
+            id: "active_older",
+            projectID: project.id,
+            title: "较早开始但仍在执行",
+            status: SessionStatus.running.rawValue,
+            source: "codex",
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        let client = MockSessionStoreClient(projects: [project], sessions: history + [active])
+        let store = SessionStore(
+            appStore: AppStore(),
+            conversationStore: ConversationStore(),
+            logStore: LogStore(),
+            clientFactory: { client }
+        )
+
+        store.selectedProjectID = project.id
+        await store.refreshAll(autoAttach: false)
+
+        XCTAssertEqual(
+            store.sessionListSnapshot(forProjectID: project.id).visibleSessions.map(\.id),
+            [active.id, history[0].id, history[1].id]
+        )
+        XCTAssertEqual(store.hiddenSessionCount(forProjectID: project.id), 2)
+    }
+
     func testSessionStoreExpandsProjectSessionsInSmallSteps() async {
         let project = makeProject(id: "proj_step_expand")
         let sessions = (0..<12).map { index in
@@ -9796,6 +9876,9 @@ final class ConversationDataFlowTests: XCTestCase {
 
         try await waitForRuntimeActivityCleared(in: store, sessionID: running.id)
         try await waitForSelectedActiveTurnID(nil, store: store)
+        XCTAssertEqual(store.selectedSession?.status, SessionStatus.completed.rawValue)
+        XCTAssertFalse(store.activeSessions.contains { $0.id == running.id })
+        XCTAssertTrue(store.recentHistorySessions.contains { $0.id == running.id })
     }
 
     func testSendingPromptCreatesWaitingForegroundActivity() async throws {
@@ -13843,6 +13926,109 @@ final class ConversationDataFlowTests: XCTestCase {
         XCTAssertEqual(Set(client.requestedWorkspaceIDs), Set(projects.map(\.id)))
     }
 
+    func testSidebarKeepsEveryActiveSessionAndLimitsOnlyHistory() async {
+        let project = makeProject(id: "proj_sidebar_lifecycle")
+        let active = (0..<10).map { index in
+            makeSession(
+                id: "thread_active_\(index)",
+                projectID: project.id,
+                title: "进行中 \(index)",
+                status: SessionStatus.running.rawValue,
+                source: "codex",
+                updatedAt: Date(timeIntervalSince1970: TimeInterval(index))
+            )
+        }
+        let history = (0..<10).map { index in
+            makeSession(
+                id: "thread_history_\(index)",
+                projectID: project.id,
+                title: "历史 \(index)",
+                status: SessionStatus.history.rawValue,
+                source: "codex",
+                updatedAt: Date(timeIntervalSince1970: TimeInterval(100 + index))
+            )
+        }
+        let client = MockSessionStoreClient(projects: [project], sessions: active + history)
+        let store = SessionStore(
+            appStore: AppStore(),
+            conversationStore: ConversationStore(),
+            logStore: LogStore(),
+            clientFactory: { client }
+        )
+
+        await store.refreshAll(autoAttach: false)
+        await store.selectProject(project)
+
+        // 进行中任务不能因为更新时间较早或超过 8 条而从侧栏消失；只限制历史预览数量。
+        XCTAssertEqual(Set(store.activeSessions.map(\.id)), Set(active.map(\.id)))
+        XCTAssertEqual(store.activeSessions.count, 10)
+        XCTAssertEqual(store.recentHistorySessions.map(\.id), (2...9).reversed().map { "thread_history_\($0)" })
+    }
+
+    func testRefreshingGlobalIndexMovesNonSelectedWorkspaceSessionIntoHistory() async {
+        let selectedProject = makeProject(id: "proj_selected_refresh")
+        let backgroundProject = makeProject(id: "proj_background_refresh")
+        let selectedHistory = makeSession(
+            id: "selected_history",
+            projectID: selectedProject.id,
+            title: "当前工作区历史",
+            status: SessionStatus.history.rawValue,
+            source: "codex"
+        )
+        let backgroundRunning = makeSession(
+            id: "background_running",
+            projectID: backgroundProject.id,
+            title: "后台任务",
+            status: SessionStatus.running.rawValue,
+            source: "codex"
+        )
+        var now = Date(timeIntervalSince1970: 1_000)
+        let client = MutableSessionPageClient(
+            projects: [selectedProject, backgroundProject],
+            page: SessionsPage(sessions: []),
+            projectPages: [
+                selectedProject.id: SessionsPage(sessions: [selectedHistory]),
+                backgroundProject.id: SessionsPage(sessions: [backgroundRunning])
+            ]
+        )
+        let appStore = AppStore()
+        let store = SessionStore(
+            appStore: appStore,
+            conversationStore: ConversationStore(),
+            logStore: LogStore(),
+            recentWorkspaceStore: makeRecentWorkspaceStore(
+                workspaces: [
+                    AgentWorkspace(project: selectedProject),
+                    AgentWorkspace(project: backgroundProject)
+                ],
+                endpoint: appStore.endpoint
+            ),
+            clientFactory: { client },
+            sessionListNow: { now }
+        )
+
+        store.selectedProjectID = selectedProject.id
+        await store.refreshAll(autoAttach: false)
+        await store.refreshSessionLibraryIndex()
+        XCTAssertTrue(store.activeSessions.contains { $0.id == backgroundRunning.id })
+
+        client.projectPages[backgroundProject.id] = SessionsPage(sessions: [
+            makeSession(
+                id: backgroundRunning.id,
+                projectID: backgroundProject.id,
+                title: backgroundRunning.title,
+                status: SessionStatus.completed.rawValue,
+                source: "codex",
+                updatedAt: Date(timeIntervalSince1970: 1_001)
+            )
+        ])
+        now = now.addingTimeInterval(3)
+        await store.refreshSessionLibraryIndex()
+
+        XCTAssertFalse(store.activeSessions.contains { $0.id == backgroundRunning.id })
+        XCTAssertTrue(store.recentHistorySessions.contains { $0.id == backgroundRunning.id })
+    }
+
     func testSessionStoreStartsOnlyValidatedInlineReviewTargets() async {
         let project = makeProject(id: "proj_review")
         let session = makeSession(
@@ -14945,6 +15131,7 @@ private final class MockSessionStoreClient: SessionStoreAPIClient {
 private final class MutableSessionPageClient: SessionStoreAPIClient {
     let projectsResult: [AgentProject]
     var page: SessionsPage
+    var projectPages: [String: SessionsPage]
     var cursorPages: [String: SessionsPage]
     var historyPages: [SessionID: HistoryMessagesPage]
     var historyCursorPages: [String: HistoryMessagesPage]
@@ -14953,12 +15140,14 @@ private final class MutableSessionPageClient: SessionStoreAPIClient {
     init(
         projects: [AgentProject],
         page: SessionsPage,
+        projectPages: [String: SessionsPage] = [:],
         cursorPages: [String: SessionsPage] = [:],
         historyPages: [SessionID: HistoryMessagesPage] = [:],
         historyCursorPages: [String: HistoryMessagesPage] = [:]
     ) {
         self.projectsResult = projects
         self.page = page
+        self.projectPages = projectPages
         self.cursorPages = cursorPages
         self.historyPages = historyPages
         self.historyCursorPages = historyCursorPages
@@ -14969,11 +15158,17 @@ private final class MutableSessionPageClient: SessionStoreAPIClient {
     }
 
     func sessions(projectID: String?, cursor: String?, limit: Int?) async throws -> [AgentSession] {
-        page.sessions
+        if let projectID, let page = projectPages[projectID] {
+            return page.sessions
+        }
+        return page.sessions
     }
 
     func sessionsPage(projectID: String?, cursor: String?, limit: Int?) async throws -> SessionsPage {
         if let cursor, let page = cursorPages[cursor] {
+            return page
+        }
+        if let projectID, let page = projectPages[projectID] {
             return page
         }
         return page

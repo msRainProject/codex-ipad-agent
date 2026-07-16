@@ -9,7 +9,7 @@ enum SessionLibraryStatusFilter: String, CaseIterable, Identifiable {
     case all
     case active
     case needsAttention
-    case completed
+    case history
 
     var id: String { rawValue }
 
@@ -18,7 +18,7 @@ enum SessionLibraryStatusFilter: String, CaseIterable, Identifiable {
         case .all: return "全部状态"
         case .active: return "运行中"
         case .needsAttention: return "需要处理"
-        case .completed: return "已完成"
+        case .history: return "历史"
         }
     }
 
@@ -29,12 +29,25 @@ enum SessionLibraryStatusFilter: String, CaseIterable, Identifiable {
         case .active:
             return session.isRunning
         case .needsAttention:
-            return session.pendingApproval != nil ||
+            return session.status == SessionStatus.waitingForApproval.rawValue ||
+                session.status == SessionStatus.waitingForInput.rawValue ||
+                session.pendingApproval != nil ||
                 session.pendingUserInput != nil ||
                 session.status == SessionStatus.failed.rawValue
-        case .completed:
-            return !session.isRunning && session.status != SessionStatus.failed.rawValue
+        case .history:
+            return !session.isRunning
         }
+    }
+}
+
+/// 会话生命周期是列表的第一层信息。保持输入顺序，只负责把仍在进行的任务和历史记录分开。
+struct SessionListPartition: Equatable {
+    let active: [AgentSession]
+    let history: [AgentSession]
+
+    init(sessions: [AgentSession]) {
+        active = sessions.filter(\.isRunning)
+        history = sessions.filter { !$0.isRunning }
     }
 }
 
@@ -80,24 +93,30 @@ struct SessionListView: View {
                     .listRowSeparator(.hidden)
                 }
             } else {
-                ForEach(visibleSessions) { session in
-                    SessionIndexRow(
-                        session: session,
-                        foregroundActivity: sessionStore.foregroundActivity(for: session.id),
-                        isSelected: session.id == sessionStore.selectedSessionID,
-                        isPinned: sessionStore.isSessionPinned(session.id),
-                        isArchived: sessionStore.isSessionArchived(session.id),
-                        reminder: sessionStore.sessionReminder(for: session.id),
-                        isObserving: sessionStore.isSessionObserving(session),
-                        style: .library,
-                        searchSnippet: sessionStore.sessionSearchSnippet(for: session.id)
-                    )
-                    .contentShape(Rectangle())
-                    .onTapGesture { select(session) }
-                    .sessionRowActions(session)
-                    .listRowInsets(.init(top: 4, leading: 20, bottom: 4, trailing: 20))
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
+                if !sessionPartition.active.isEmpty {
+                    Section {
+                        sessionRows(sessionPartition.active)
+                    } header: {
+                        sessionSectionHeader(
+                            title: "进行中",
+                            systemImage: "bolt.fill",
+                            count: sessionPartition.active.count,
+                            color: tokens.primaryAction
+                        )
+                    }
+                }
+
+                if !sessionPartition.history.isEmpty {
+                    Section {
+                        sessionRows(sessionPartition.history)
+                    } header: {
+                        sessionSectionHeader(
+                            title: "历史",
+                            systemImage: "clock.arrow.circlepath",
+                            count: sessionPartition.history.count,
+                            color: tokens.tertiaryText
+                        )
+                    }
                 }
             }
 
@@ -184,6 +203,52 @@ struct SessionListView: View {
             (selectedWorkspaceID == "all" || session.projectID == selectedWorkspaceID) &&
                 selectedStatus.includes(session)
         }
+    }
+
+    private var sessionPartition: SessionListPartition {
+        SessionListPartition(sessions: visibleSessions)
+    }
+
+    @ViewBuilder
+    private func sessionRows(_ sessions: [AgentSession]) -> some View {
+        ForEach(sessions) { session in
+            SessionIndexRow(
+                session: session,
+                foregroundActivity: sessionStore.foregroundActivity(for: session.id),
+                isSelected: session.id == sessionStore.selectedSessionID,
+                isPinned: sessionStore.isSessionPinned(session.id),
+                isArchived: sessionStore.isSessionArchived(session.id),
+                reminder: sessionStore.sessionReminder(for: session.id),
+                isObserving: sessionStore.isSessionObserving(session),
+                style: .library,
+                searchSnippet: sessionStore.sessionSearchSnippet(for: session.id)
+            )
+            .contentShape(Rectangle())
+            .onTapGesture { select(session) }
+            .sessionRowActions(session)
+            .listRowInsets(.init(top: 4, leading: 20, bottom: 4, trailing: 20))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+        }
+    }
+
+    private func sessionSectionHeader(
+        title: String,
+        systemImage: String,
+        count: Int,
+        color: Color
+    ) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: systemImage)
+            Text(title)
+            Text("\(count)")
+                .monospacedDigit()
+                .foregroundStyle(color.opacity(0.72))
+        }
+        .font(themeStore.uiFont(.caption, weight: .semibold))
+        .foregroundStyle(color)
+        .textCase(nil)
+        .accessibilityElement(children: .combine)
     }
 
     private func filterMenu(tokens: ThemeTokens) -> some View {
@@ -276,11 +341,7 @@ struct SessionIndexRow: View {
 
                 Spacer(minLength: 8)
 
-                if status.showsSpinner && style == .library {
-                    ProgressView()
-                        .controlSize(.mini)
-                        .tint(statusColor(tokens: tokens))
-                } else if style == .library {
+                if style == .library {
                     Text(timestampText)
                         .font(themeStore.uiFont(.caption))
                         .foregroundStyle(tokens.tertiaryText)
@@ -297,13 +358,12 @@ struct SessionIndexRow: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
 
-                HStack(spacing: 3) {
-                    Circle()
-                        .fill(statusColor(tokens: tokens))
-                        .frame(width: style == .sidebar ? 4 : 5, height: style == .sidebar ? 4 : 5)
-                    Text(status.title)
-                        .font(themeStore.uiFont(size: style == .sidebar ? 9 : 11, weight: .medium))
-                        .foregroundStyle(statusColor(tokens: tokens))
+                statusLabel(tokens: tokens)
+
+                if isObserving {
+                    Image(systemName: "eye")
+                        .foregroundStyle(tokens.tertiaryText)
+                        .accessibilityLabel("仅观察")
                 }
 
                 if style == .sidebar {
@@ -327,7 +387,7 @@ struct SessionIndexRow: View {
         .padding(.horizontal, style == .sidebar ? 10 : 14)
         .padding(.vertical, style == .sidebar ? 6 : 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isSelected ? tokens.selectionFill : (style == .library ? tokens.surface.opacity(0.58) : Color.clear), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(rowBackground(tokens: tokens), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(alignment: .leading) {
             if isSelected {
                 Capsule()
@@ -340,16 +400,64 @@ struct SessionIndexRow: View {
         .overlay {
             if style == .library {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(isSelected ? tokens.primaryAction.opacity(0.34) : tokens.border.opacity(0.58), lineWidth: 1)
+                    .stroke(rowBorder(tokens: tokens), lineWidth: 1)
             }
         }
     }
 
     private var status: AgentSessionDisplayStatus {
-        if isObserving {
-            return AgentSessionDisplayStatus(title: "观察中", systemImage: "eye", tone: .neutral, showsSpinner: false)
-        }
         return session.displayStatus(foregroundActivity: foregroundActivity)
+    }
+
+    @ViewBuilder
+    private func statusLabel(tokens: ThemeTokens) -> some View {
+        HStack(spacing: 4) {
+            if status.showsSpinner {
+                ProgressView()
+                    .controlSize(.mini)
+                    .tint(statusColor(tokens: tokens))
+            } else {
+                Image(systemName: status.systemImage)
+                    .font(themeStore.uiFont(size: style == .sidebar ? 8 : 10, weight: .semibold))
+            }
+            Text(status.title)
+        }
+        .font(themeStore.uiFont(size: style == .sidebar ? 9 : 11, weight: .semibold))
+        .foregroundStyle(statusColor(tokens: tokens))
+        .padding(.horizontal, style == .sidebar ? 0 : 7)
+        .padding(.vertical, style == .sidebar ? 0 : 3)
+        .background {
+            if style == .library {
+                Capsule()
+                    .fill(statusColor(tokens: tokens).opacity(status.tone == .neutral ? 0.07 : 0.10))
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(status.title)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private func rowBackground(tokens: ThemeTokens) -> Color {
+        if isSelected {
+            return tokens.selectionFill
+        }
+        guard style == .library else {
+            return .clear
+        }
+        if session.isRunning {
+            return statusColor(tokens: tokens).opacity(0.06)
+        }
+        return tokens.surface.opacity(0.58)
+    }
+
+    private func rowBorder(tokens: ThemeTokens) -> Color {
+        if isSelected {
+            return tokens.primaryAction.opacity(0.34)
+        }
+        if session.isRunning {
+            return statusColor(tokens: tokens).opacity(0.24)
+        }
+        return tokens.border.opacity(0.58)
     }
 
     private func statusColor(tokens: ThemeTokens) -> Color {

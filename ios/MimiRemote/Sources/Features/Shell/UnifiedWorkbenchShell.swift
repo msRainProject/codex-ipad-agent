@@ -281,30 +281,23 @@ struct UnifiedWorkbenchShell: View {
                     )
                 }
 
-                Section("最近") {
-                    if sessionStore.recentSessions.isEmpty {
-                        Text("还没有最近会话")
+                if !sessionStore.activeSessions.isEmpty {
+                    Section("进行中") {
+                        ForEach(sessionStore.activeSessions) { session in
+                            sidebarSessionLink(session)
+                        }
+                    }
+                }
+
+                Section(sessionStore.activeSessions.isEmpty ? "最近" : "最近历史") {
+                    if sessionStore.recentHistorySessions.isEmpty {
+                        Text(sessionStore.activeSessions.isEmpty ? "还没有最近会话" : "还没有历史会话")
                             .font(themeStore.uiFont(.caption))
                             .foregroundStyle(tokens.tertiaryText)
                             .listRowBackground(Color.clear)
                     } else {
-                        ForEach(sessionStore.recentSessions) { session in
-                            NavigationLink(value: AppDestination.session(session.id)) {
-                                SessionIndexRow(
-                                    session: session,
-                                    foregroundActivity: sessionStore.foregroundActivity(for: session.id),
-                                    isSelected: session.id == sessionStore.selectedSessionID,
-                                    isPinned: sessionStore.isSessionPinned(session.id),
-                                    isArchived: sessionStore.isSessionArchived(session.id),
-                                    reminder: sessionStore.sessionReminder(for: session.id),
-                                    isObserving: sessionStore.isSessionObserving(session),
-                                    style: .sidebar
-                                )
-                            }
-                            .sessionRowActions(session)
-                            .listRowInsets(.init(top: 2, leading: 8, bottom: 2, trailing: 8))
-                            .listRowSeparator(.hidden)
-                            .listRowBackground(Color.clear)
+                        ForEach(sessionStore.recentHistorySessions) { session in
+                            sidebarSessionLink(session)
                         }
                     }
                 }
@@ -355,6 +348,25 @@ struct UnifiedWorkbenchShell: View {
         .task {
             await sessionStore.refreshSessionLibraryIndex()
         }
+    }
+
+    private func sidebarSessionLink(_ session: AgentSession) -> some View {
+        NavigationLink(value: AppDestination.session(session.id)) {
+            SessionIndexRow(
+                session: session,
+                foregroundActivity: sessionStore.foregroundActivity(for: session.id),
+                isSelected: session.id == sessionStore.selectedSessionID,
+                isPinned: sessionStore.isSessionPinned(session.id),
+                isArchived: sessionStore.isSessionArchived(session.id),
+                reminder: sessionStore.sessionReminder(for: session.id),
+                isObserving: sessionStore.isSessionObserving(session),
+                style: .sidebar
+            )
+        }
+        .sessionRowActions(session)
+        .listRowInsets(.init(top: 2, leading: 8, bottom: 2, trailing: 8))
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
     }
 
     private func sidebarFooter(tokens: ThemeTokens, bottomSafeAreaInset: CGFloat) -> some View {
@@ -842,7 +854,7 @@ private struct CodexUsageRingsControl: View {
         Button {
             showsDetails.toggle()
         } label: {
-            usageRings(metrics: metrics, tokens: tokens)
+            usageRings(metrics: metrics)
                 .frame(width: metrics.hitSize, height: metrics.hitSize)
                 .contentShape(Rectangle())
         }
@@ -858,50 +870,8 @@ private struct CodexUsageRingsControl: View {
         }
     }
 
-    private func usageRings(metrics: CodexUsageRingMetrics, tokens: ThemeTokens) -> some View {
-        let windows = Array(display.windows.prefix(2))
-
-        return ZStack {
-            ForEach(Array(windows.enumerated()), id: \.element.id) { index, window in
-                usageRing(
-                    progress: window.remainingProgress,
-                    diameter: windows.count == 1 || index == 1 ? metrics.diameter : metrics.innerDiameter,
-                    lineWidth: windows.count == 1 || index == 1 ? metrics.outerLineWidth : metrics.innerLineWidth,
-                    tint: tint(for: window),
-                    tokens: tokens
-                )
-            }
-
-            if !hasUsageProgress {
-                Text("?")
-                    .font(.system(size: metrics.questionMarkSize, weight: .bold, design: .rounded))
-                    .foregroundStyle(tokens.tertiaryText)
-            }
-        }
-        .frame(width: metrics.diameter, height: metrics.diameter)
-        .accessibilityHidden(true)
-    }
-
-    private func usageRing(
-        progress: Double?,
-        diameter: CGFloat,
-        lineWidth: CGFloat,
-        tint: Color,
-        tokens: ThemeTokens
-    ) -> some View {
-        ZStack {
-            Circle()
-                .stroke(tokens.tertiaryText.opacity(0.18), lineWidth: lineWidth)
-
-            if let progress {
-                Circle()
-                    .trim(from: 0, to: progress)
-                    .stroke(tint, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-            }
-        }
-        .frame(width: diameter, height: diameter)
-        .animation(.snappy(duration: 0.25), value: progress)
+    private func usageRings(metrics: CodexUsageRingMetrics) -> some View {
+        CodexUsageRingsGraphic(display: display, metrics: metrics)
     }
 
     private func usageDetails(tokens: ThemeTokens) -> some View {
@@ -1020,10 +990,6 @@ private struct CodexUsageRingsControl: View {
         await onRefresh()
     }
 
-    private var hasUsageProgress: Bool {
-        display.windows.contains { $0.remainingProgress != nil }
-    }
-
     private func tint(for window: CodexUsageWindowDisplay) -> Color {
         if window.durationMinutes != nil {
             return window.isDayScaleWindow ? .pink : .cyan
@@ -1038,6 +1004,70 @@ private struct CodexUsageRingsControl: View {
         return display.windows
             .map { "\($0.accessibilityName)\($0.remainingText)" }
             .joined(separator: "，")
+    }
+}
+
+/// 首页和设置页共用同一套双圆环，避免同一份额度在不同入口出现相反或不一致的视觉语义。
+struct CodexUsageRingsGraphic: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var themeStore: ThemeStore
+
+    let display: CodexUsageWindowsDisplay
+    let metrics: CodexUsageRingMetrics
+
+    var body: some View {
+        let tokens = themeStore.tokens(for: colorScheme)
+        let windows = Array(display.windows.prefix(2))
+
+        ZStack {
+            ForEach(Array(windows.enumerated()), id: \.element.id) { index, window in
+                usageRing(
+                    progress: window.remainingProgress,
+                    diameter: windows.count == 1 || index == 1 ? metrics.diameter : metrics.innerDiameter,
+                    lineWidth: windows.count == 1 || index == 1 ? metrics.outerLineWidth : metrics.innerLineWidth,
+                    tint: tint(for: window),
+                    tokens: tokens
+                )
+            }
+
+            if !display.windows.contains(where: { $0.remainingProgress != nil }) {
+                Text("?")
+                    .font(.system(size: metrics.questionMarkSize, weight: .bold, design: .rounded))
+                    .foregroundStyle(tokens.tertiaryText)
+            }
+        }
+        .frame(width: metrics.diameter, height: metrics.diameter)
+        .accessibilityHidden(true)
+    }
+
+    private func usageRing(
+        progress: Double?,
+        diameter: CGFloat,
+        lineWidth: CGFloat,
+        tint: Color,
+        tokens: ThemeTokens
+    ) -> some View {
+        ZStack {
+            Circle()
+                .stroke(tokens.tertiaryText.opacity(0.18), lineWidth: lineWidth)
+
+            if let progress {
+                Circle()
+                    .trim(from: 0, to: progress)
+                    .stroke(tint, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+            }
+        }
+        .frame(width: diameter, height: diameter)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: progress)
+    }
+
+    private func tint(for window: CodexUsageWindowDisplay) -> Color {
+        if window.durationMinutes != nil {
+            return window.isDayScaleWindow ? .pink : .cyan
+        }
+        return window.kind == .secondary ? .pink : .cyan
     }
 }
 

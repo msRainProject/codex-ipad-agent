@@ -1277,8 +1277,11 @@ private struct SessionRow: View, Equatable {
 
             // 侧栏作为会话索引，默认不展示聊天 preview，避免内容摘要压过标题和关键状态。
             if shouldShowStatusLine {
-                HStack(spacing: 0) {
+                HStack(spacing: 5) {
                     statusCapsule(statusSummary)
+                    if isObserving {
+                        observationCapsule
+                    }
                     Spacer(minLength: 0)
                 }
                 .lineLimit(1)
@@ -1339,9 +1342,6 @@ private struct SessionRow: View, Equatable {
     }
 
     private var statusSummary: AgentSessionDisplayStatus {
-        if isObserving {
-            return AgentSessionDisplayStatus(title: "观察中", systemImage: "eye", tone: .neutral, showsSpinner: false)
-        }
         return session.displayStatus(foregroundActivity: foregroundActivity)
     }
 
@@ -1350,24 +1350,49 @@ private struct SessionRow: View, Equatable {
     }
 
     private var shouldShowStatusLine: Bool {
-        session.pendingApproval != nil
+        session.isRunning
+            || session.pendingApproval != nil
             || session.status == SessionStatus.waitingForInput.rawValue
             || session.status == SessionStatus.waitingForApproval.rawValue
             || session.status == SessionStatus.failed.rawValue
     }
 
     private var shouldShowTrailingActivityIcon: Bool {
-        isObserving || session.isRunning || foregroundActivity != nil || session.activeTurnID != nil
+        session.isRunning || foregroundActivity != nil || session.activeTurnID != nil
     }
 
     private func statusCapsule(_ status: AgentSessionDisplayStatus) -> some View {
-        Text(status.title)
-            .lineLimit(1)
+        HStack(spacing: 3) {
+            if status.showsSpinner {
+                ProgressView()
+                    .controlSize(.mini)
+                    .tint(tint(for: status.tone))
+            } else {
+                Image(systemName: status.systemImage)
+                    .font(themeStore.uiFont(size: 9, weight: .semibold))
+            }
+            Text(status.title)
+                .lineLimit(1)
+        }
         .font(themeStore.uiFont(size: 10, weight: .medium))
         .foregroundStyle(tint(for: status.tone))
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
         .background(statusCapsuleBackground(for: status.tone), in: Capsule())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(status.title)
+    }
+
+    private var observationCapsule: some View {
+        let tokens = themeStore.tokens(for: colorScheme)
+
+        return Label("仅观察", systemImage: "eye")
+            .labelStyle(.titleAndIcon)
+            .font(themeStore.uiFont(size: 10, weight: .medium))
+            .foregroundStyle(tokens.tertiaryText)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(tokens.elevatedSurface.opacity(0.72), in: Capsule())
     }
 
     private func tint(for tone: AgentSessionStatusTone) -> Color {
