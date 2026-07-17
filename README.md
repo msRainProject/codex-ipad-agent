@@ -202,11 +202,11 @@ agentd serve --config /path/to/config.json
 
 方案：`agentd` 通过外部 `alleycat-claude-bridge` 子进程把 iPad 的 app-server JSON-RPC WebSocket 转成 Claude bridge 的 stdio JSONL。bridge 不并入本仓库，属于可选依赖；launchd/Homebrew service 的 `PATH` 很窄，建议 `claude.bridge_bin` 写绝对路径。
 
-当前要求 `alleycat-claude-bridge >= 0.2.0`。旧版本和没有标准 `--version` 输出的 bridge 会被 `agentd` 拒绝，避免把“能启动”误判为“协议兼容”。使用下面的不可变 commit 安装已审阅版本，安装后把 `command -v` 返回的绝对路径写入 `claude.bridge_bin`，再重启 `agentd`：
+当前要求 `alleycat-claude-bridge >= 0.2.1`。旧版本和没有标准 `--version` 输出的 bridge 会被 `agentd` 拒绝，避免把“能启动”误判为“协议兼容”。使用下面的不可变 commit 安装已审阅版本，安装后把 `command -v` 返回的绝对路径写入 `claude.bridge_bin`，再重启 `agentd`：
 
 ```bash
 cargo install --git https://github.com/gaixianggeng/alleycat.git \
-  --rev c50256dc9cc71f5130a176e32bb6fd33b1e06f74 \
+  --rev 1bb754687990a308dcc330f369820ff42d7c3289 \
   --locked --force alleycat-claude-bridge
 
 command -v alleycat-claude-bridge
