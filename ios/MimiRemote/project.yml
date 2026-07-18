@@ -6,7 +6,7 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    DEVELOPMENT_TEAM: 9HZ89R58PZ
+    DEVELOPMENT_TEAM: JLC8WTNXW8
     IPHONEOS_DEPLOYMENT_TARGET: "26.0"
     MACOSX_DEPLOYMENT_TARGET: "26.0"
     SDKROOT: auto
@@ -38,7 +38,7 @@ targets:
         product: Markdown
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.gaixianggeng.mimi
+        PRODUCT_BUNDLE_IDENTIFIER: com.fuquanbin.mimiremote
         PRODUCT_NAME: MimiRemote
         PRODUCT_MODULE_NAME: MimiRemote
         INFOPLIST_FILE: Resources/Info.plist
@@ -76,7 +76,7 @@ targets:
         product: SnapshotTesting
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.gaixianggeng.mimiTests
+        PRODUCT_BUNDLE_IDENTIFIER: com.fuquanbin.mimiremoteTests
         SDKROOT: auto
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: "YES"
