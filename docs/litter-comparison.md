@@ -11,7 +11,7 @@
 
 - 第一版继续采用 `iPhone / iPad -> Tailscale -> agentd -> Codex app-server`，不引入 Rust Core、Codex fork 或 SSH 控制面。
 - 先补会影响安装、连接、恢复和高频开发闭环的能力，再考虑平台扩张和展示型功能。
-- Litter 是 GPLv3 并附 App Store / Google Play 分发许可；Mimi Remote 是 MIT。可以学习公开交互和工程经验，但不能直接复制 GPL 实现到本仓库。
+- Litter 与 Mimi Remote 均使用 GPLv3 并附 App Store / Google Play 分发许可。即使协议兼容，仍默认采用独立实现；如确需复用代码，必须保留原作者版权、许可证和修改说明。
 
 ## 实现对照
 
@@ -59,4 +59,4 @@
 - Litter 是快速演进中的独立项目，本表只代表上述 commit 的本地代码事实；升级优先级不能依赖一次性印象，应在下一次大版本规划前重新审计。
 - “功能存在”不等于适合 Mimi。SSH、Realtime Voice、Watch 和多端共享核心会显著扩大权限、依赖和测试矩阵。
 - 多 Mac 档案已经从单 endpoint 模型迁移为“UserDefaults 非敏感元数据 + 每档案独立 Keychain account”；迁移、切换或删除失败时必须继续保持 Keychain-first 的旧连接保留语义，不能把 Token 写入 UserDefaults。
-- 两个项目许可证不同。任何需要复用源码的需求都必须先做许可证评估和明确归属；默认只做独立实现。
+- 协议兼容不等于可以无归属复制。任何需要复用源码的需求都必须先确认来源、保留版权与许可证声明，并明确记录修改；默认仍做独立实现。

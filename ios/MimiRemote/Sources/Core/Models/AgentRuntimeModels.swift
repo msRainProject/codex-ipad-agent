@@ -522,15 +522,19 @@ struct CodexQuotaNotice: Equatable {
     static func make(rateLimit: RateLimitSummary?, errorMessage: String?, now: Date = Date()) -> CodexQuotaNotice? {
         if let rateLimit, rateLimit.isExhausted {
             let resetDate = rateLimit.resetDate
+            // rate limit 快照可能在窗口重置后仍停留在 100%。重置时间已经过去时，
+            // 不再用陈旧快照阻止发送；下一次账号用量刷新会覆盖它。
+            if let resetDate, resetDate <= now {
+                return nil
+            }
             let resetText = resetDate.map { Self.resetText($0, now: now) }
-            let blocksSending = resetDate.map { $0 > now } ?? true
             let suffix = resetText.map { "预计 \($0) 恢复；也可以在桌面 Codex 点“增加额度”或“重置使用量”。" }
                 ?? "可以在桌面 Codex 点“增加额度”或“重置使用量”。"
             return CodexQuotaNotice(
                 title: "Codex 消息额度已用尽",
                 message: "\(rateLimit.displayName) 当前额度不可用。\(suffix)",
                 resetDate: resetDate,
-                blocksSending: blocksSending,
+                blocksSending: true,
                 canDismiss: false
             )
         }
@@ -551,25 +555,57 @@ struct CodexQuotaNotice: Equatable {
 
     static func isQuotaError(_ message: String) -> Bool {
         let lower = message.lowercased()
-        if lower.contains("skill descriptions") || lower.contains("skills context budget") {
+        if isUnrelatedBudgetWarning(lower) {
             return false
         }
+        // 只有明确表达“额度/用量已经耗尽”的错误才升级成阻塞横幅。
+        // 普通 HTTP 429 或 rate limit 也可能是瞬时限流，仍保留原始错误供用户重试，
+        // 但不能据此宣告账号消息额度已经用尽。
         return [
+            "hit your usage limit",
+            "reached your usage limit",
+            "usage limit reached",
+            "usage limit exceeded",
+            "usage limit has been reached",
+            "message limit reached",
+            "message limit exceeded",
+            "message limit has been exhausted",
+            "messages limit has been exhausted",
+            "limit has been exhausted",
+            "exceeded your current quota",
+            "quota exceeded",
+            "quota exhausted",
+            "quota has been exhausted",
+            "额度已用尽",
+            "额度耗尽",
+            "消息额度不足",
+            "用量已达上限",
+            "使用量已达上限"
+        ].contains { lower.contains($0) }
+    }
+
+    /// 宽松识别所有额度或限流相关错误，只用于触发账号状态刷新和清理旧错误，
+    /// 不直接决定是否禁用发送。
+    static func isRateLimitError(_ message: String) -> Bool {
+        let lower = message.lowercased()
+        if isUnrelatedBudgetWarning(lower) {
+            return false
+        }
+        return isQuotaError(message) || [
             "rate limit",
             "ratelimit",
             "quota",
-            "message limit",
-            "messages limit",
-            "usage limit",
-            "limit has been exhausted",
-            "exceeded your current quota",
             "429",
             "额度",
             "限额",
             "速率限制",
-            "用量受限",
-            "已用尽"
+            "用量受限"
         ].contains { lower.contains($0) }
+    }
+
+    private static func isUnrelatedBudgetWarning(_ lowercasedMessage: String) -> Bool {
+        lowercasedMessage.contains("skill descriptions")
+            || lowercasedMessage.contains("skills context budget")
     }
 
     private static func resetText(_ date: Date, now: Date) -> String {

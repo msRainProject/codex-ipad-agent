@@ -10,6 +10,13 @@ extension SessionStore {
         await refreshUsage(runtimeProvider: "claude")
     }
 
+    func refreshSelectedUsage() async {
+        let runtimeProvider = selectedSession.map {
+            Self.normalizedRuntimeProvider($0.runtimeProvider ?? $0.source)
+        } ?? "codex"
+        await refreshUsage(runtimeProvider: runtimeProvider)
+    }
+
     func refreshUsage(runtimeProvider: String) async {
         do {
             let normalizedProvider = Self.normalizedRuntimeProvider(runtimeProvider)
@@ -22,6 +29,13 @@ extension SessionStore {
                Self.normalizedRuntimeProvider(session.runtimeProvider ?? session.source) == normalizedProvider {
                 session.rateLimit = summary
                 upsert(session)
+            }
+            // 账号接口是当前额度的权威结果。健康快照到达后，清理之前由瞬时
+            // 429、过期错误文案等留下的额度告警，让输入框立即恢复可发送。
+            if !summary.isExhausted,
+               let errorMessage,
+               CodexQuotaNotice.isRateLimitError(errorMessage) {
+                setErrorMessage(nil)
             }
         } catch {
             setErrorMessage(error.localizedDescription)

@@ -1,12 +1,12 @@
 # Claude bridge 架构
 
-更新日期：2026-07-17
+更新日期：2026-07-18
 
 ## 目标
 
 Claude Code 实验通道让 Mimi Remote 在不复制第二套 iOS 会话 UI、不把 Claude 凭证带到移动端的前提下，复用现有 app-server JSON-RPC 客户端和 `agentd` 安全边界。
 
-bridge 由独立仓库 [gaixianggeng/alleycat](https://github.com/gaixianggeng/alleycat) 提供。本仓库只负责探测、启动、约束和回收 `alleycat-claude-bridge` 子进程。
+bridge 源码位于本仓库 [`bridges/claude`](../bridges/claude)。这里只导入 Mimi Remote 实际需要的 `claude-bridge`、`bridge-core` 和 `codex-proto`，不引入 Alleycat daemon 及其他 coding agent adapter；`agentd` 负责探测、启动、约束和回收 `alleycat-claude-bridge` 子进程。
 
 ## 方案
 
@@ -48,6 +48,7 @@ sequenceDiagram
 
 - `claude.enabled=false` 是默认状态，配置接口只返回 Codex channel。
 - 启用后，`agentd` 用 `--version` 探测 bridge；低于 `0.2.1`、无标准版本或二进制不存在时 fail closed。
+- bridge 与 iOS / Go 代码同仓维护；本地构建使用 `cargo install --locked --path bridges/claude/crates/claude-bridge --force --bin alleycat-claude-bridge`，公开安装使用当前仓库 Git URL。
 - 每条 Claude WebSocket 对应一个 bridge 子进程，`lifecycle=per_connection`。
 - 默认最多同时运行 3 个 bridge，可用 `max_concurrent_bridges` 收窄。
 - WebSocket、stdin、stdout、bridge 进程任一侧结束都会取消本轮连接并回收整个进程组。

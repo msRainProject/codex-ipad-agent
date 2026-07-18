@@ -27,15 +27,6 @@ enum GPT56ModelGridCatalog {
         }
     }
 
-    static func detail(for modelID: String) -> String {
-        switch modelID.lowercased() {
-        case "gpt-5.6-sol": return "精细与完成度"
-        case "gpt-5.6-terra": return "日常均衡"
-        case "gpt-5.6-luna": return "清晰可复现"
-        default: return ""
-        }
-    }
-
     static func effortTitle(_ effort: CodexAppServerReasoningEffort) -> String {
         switch effort {
         case .medium: return "中"
@@ -60,7 +51,9 @@ struct ModelReasoningGridPicker: View {
     let selection: GPT56ModelGridSelection
     let selectedModelID: String?
     let isRefreshing: Bool
+    let isFastMode: Bool
     let onSelect: (CodexAppServerModelOption, CodexAppServerReasoningEffort) -> Void
+    let onFastModeChange: (Bool) -> Void
     let onSelectModelOnly: (CodexAppServerModelOption?) -> Void
     let onRefresh: () -> Void
 
@@ -70,30 +63,25 @@ struct ModelReasoningGridPicker: View {
     @State private var isDragging = false
     @State private var gestureRevision = 0
 
-    // 每个格子仍保留 44pt 以上触控高度，但整体收窄，避免浮层盖住过多会话内容。
-    private let pickerWidth: CGFloat = 408
-    private let rowLabelWidth: CGFloat = 68
-    private let gridHeight: CGFloat = 174
+    // 九宫格保持 54pt 的单格高度；删掉解释性文案后收窄浮层，但不给 Dynamic Type 继续挤压行名。
+    private let pickerWidth: CGFloat = 352
+    private let rowLabelWidth: CGFloat = 52
+    private let gridHeight: CGFloat = 162
+    private let dragCancellationMargin: CGFloat = 12
 
     var body: some View {
         let tokens = themeStore.tokens(for: colorScheme)
         let rows = GPT56ModelGridCatalog.rows(from: options)
 
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             header(tokens: tokens)
             columnLabels(tokens: tokens)
             HStack(spacing: 8) {
                 rowLabels(rows: rows, tokens: tokens)
                 grid(rows: rows, tokens: tokens)
             }
-            HStack(spacing: 5) {
-                Image(systemName: "hand.tap")
-                Text("点按或滑动选择")
-            }
-            .font(themeStore.uiFont(.caption2, weight: .medium))
-            .foregroundStyle(tokens.tertiaryText)
         }
-        .padding(14)
+        .padding(12)
         .frame(width: pickerWidth)
         .background(tokens.surface)
         .onChange(of: selection) { _, _ in
@@ -103,16 +91,7 @@ struct ModelReasoningGridPicker: View {
     }
 
     private func header(tokens: ThemeTokens) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text("GPT-5.6")
-                .font(themeStore.uiFont(.headline, weight: .semibold))
-                .foregroundStyle(tokens.primaryText)
-            Text("模型 × 推理强度")
-                .font(themeStore.uiFont(.caption))
-                .foregroundStyle(tokens.secondaryText)
-
-            Spacer()
-
+        HStack(spacing: 8) {
             Menu {
                 Button {
                     onSelectModelOnly(nil)
@@ -139,17 +118,63 @@ struct ModelReasoningGridPicker: View {
                 }
                 .font(themeStore.uiFont(.caption, weight: .semibold))
                 .foregroundStyle(tokens.accent)
-                .padding(.horizontal, 9)
-                .frame(height: 28)
+                .padding(.horizontal, 10)
+                .frame(height: 30)
                 .background(tokens.elevatedSurface.opacity(0.72), in: Capsule())
                 .overlay {
                     Capsule()
                         .strokeBorder(tokens.border.opacity(0.58), lineWidth: 0.75)
                 }
+                .padding(.vertical, 7)
+                .contentShape(Rectangle())
             }
             .menuStyle(.button)
-            .buttonStyle(.plain)
+            .buttonStyle(ComposerPressButtonStyle(reduceMotion: reduceMotion))
+            .accessibilityLabel("全部模型")
+
+            Spacer(minLength: 12)
+
+            Toggle(isOn: fastModeBinding) {
+                HStack(spacing: 5) {
+                    Image(systemName: isFastMode ? "bolt.fill" : "bolt")
+                    Text("快速")
+                }
+                .font(themeStore.uiFont(.caption, weight: .semibold))
+                .foregroundStyle(isFastMode ? Color.white : tokens.accent)
+                .padding(.horizontal, 11)
+                .frame(height: 30)
+                .background(
+                    isFastMode ? tokens.accent : tokens.elevatedSurface.opacity(0.72),
+                    in: Capsule()
+                )
+                .overlay {
+                    Capsule()
+                        .strokeBorder(
+                            isFastMode ? tokens.accent.opacity(0.88) : tokens.border.opacity(0.58),
+                            lineWidth: 0.75
+                        )
+                }
+                .padding(.vertical, 7)
+                .contentShape(Rectangle())
+            }
+            .toggleStyle(.button)
+            .buttonStyle(ComposerPressButtonStyle(reduceMotion: reduceMotion))
+            .accessibilityLabel("快速模式")
+            .accessibilityValue(isFastMode ? "已开启" : "已关闭")
+            .accessibilityHint("开启后下一轮使用优先服务速度")
         }
+        .frame(height: 44)
+    }
+
+    private var fastModeBinding: Binding<Bool> {
+        Binding(
+            get: { isFastMode },
+            set: { newValue in
+                guard newValue != isFastMode else { return }
+                UISelectionFeedbackGenerator().selectionChanged()
+                onFastModeChange(newValue)
+            }
+        )
     }
 
     private func columnLabels(tokens: ThemeTokens) -> some View {
@@ -169,15 +194,11 @@ struct ModelReasoningGridPicker: View {
     private func rowLabels(rows: [CodexAppServerModelOption], tokens: ThemeTokens) -> some View {
         VStack(spacing: 0) {
             ForEach(rows) { option in
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(GPT56ModelGridCatalog.shortTitle(for: option.model))
-                        .font(themeStore.uiFont(.subheadline, weight: .semibold))
-                        .foregroundStyle(activeSelection.modelID == option.model ? tokens.accent : tokens.primaryText)
-                    Text(GPT56ModelGridCatalog.detail(for: option.model))
-                        .font(themeStore.uiFont(size: 9, weight: .medium))
-                        .foregroundStyle(tokens.tertiaryText)
-                        .lineLimit(1)
-                }
+                Text(GPT56ModelGridCatalog.shortTitle(for: option.model))
+                    .font(themeStore.uiFont(.subheadline, weight: .semibold))
+                    .foregroundStyle(activeSelection.modelID == option.model ? tokens.accent : tokens.primaryText)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
                 .frame(width: rowLabelWidth, alignment: .trailing)
                 .frame(maxHeight: .infinity, alignment: .trailing)
             }
@@ -253,9 +274,10 @@ struct ModelReasoningGridPicker: View {
                     .fill(selected ? tokens.accent.opacity(0.28) : tokens.tertiaryText.opacity(supported ? 0.32 : 0.12))
                     .frame(width: selected ? 8 : 6, height: selected ? 8 : 6)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ComposerPressButtonStyle(reduceMotion: reduceMotion))
         .disabled(!supported)
         .accessibilityLabel("\(GPT56ModelGridCatalog.shortTitle(for: option.model))，推理强度\(GPT56ModelGridCatalog.effortTitle(effort))")
         .accessibilityValue(selected ? "已选择" : "未选择")
@@ -301,7 +323,8 @@ struct ModelReasoningGridPicker: View {
     }
 
     private func dragGesture(rows: [CodexAppServerModelOption], size: CGSize) -> some Gesture {
-        DragGesture(minimumDistance: 0)
+        // 单击交给格子 Button；8pt 后才认定为拖动，避免一次点击同时走两条提交链路。
+        DragGesture(minimumDistance: 8)
             .onChanged { value in
                 if !isDragging {
                     isDragging = true
@@ -310,12 +333,15 @@ struct ModelReasoningGridPicker: View {
                 let point = rubberBanded(value.location, size: size)
                 dragPoint = point
                 guard let candidate = candidate(at: value.location, rows: rows, size: size),
-                      candidate != previewSelection,
                       let option = rows.first(where: { $0.model == candidate.modelID }),
                       GPT56ModelGridCatalog.supports(candidate.effort, option: option)
                 else {
+                    // 手指可继续看到橡皮筋阻力；超出容错边界后清掉预览，松手会取消选择。
+                    previewSelection = nil
+                    lastHapticSelection = nil
                     return
                 }
+                guard candidate != previewSelection else { return }
                 previewSelection = candidate
                 if candidate != lastHapticSelection {
                     UISelectionFeedbackGenerator().selectionChanged()
@@ -328,19 +354,20 @@ struct ModelReasoningGridPicker: View {
                       let option = rows.first(where: { $0.model == candidate.modelID }),
                       GPT56ModelGridCatalog.supports(candidate.effort, option: option)
                 else {
-                    withAnimation(settleAnimation) {
+                    withAnimation(dragSettleAnimation) {
                         dragPoint = nil
                         previewSelection = nil
                     }
+                    lastHapticSelection = nil
                     return
                 }
-                withAnimation(settleAnimation) {
+                withAnimation(dragSettleAnimation) {
                     previewSelection = candidate
                     dragPoint = center(for: candidate, rows: rows, size: size)
                 }
                 onSelect(option, candidate.effort)
                 let completedRevision = gestureRevision
-                DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0.13 : 0.36)) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0.13 : 0.32)) {
                     guard completedRevision == gestureRevision, !isDragging else { return }
                     dragPoint = nil
                     previewSelection = nil
@@ -353,10 +380,16 @@ struct ModelReasoningGridPicker: View {
         previewSelection ?? selection
     }
 
-    private var settleAnimation: Animation {
+    private var tapSelectionAnimation: Animation {
+        reduceMotion
+            ? .easeOut(duration: 0.1)
+            : .spring(response: 0.24, dampingFraction: 1)
+    }
+
+    private var dragSettleAnimation: Animation {
         reduceMotion
             ? .easeOut(duration: 0.12)
-            : .spring(response: 0.34, dampingFraction: 0.86, blendDuration: 0.06)
+            : .spring(response: 0.3, dampingFraction: 1)
     }
 
     private var visibleAllModels: [CodexAppServerModelOption] {
@@ -369,6 +402,13 @@ struct ModelReasoningGridPicker: View {
         size: CGSize
     ) -> GPT56ModelGridSelection? {
         guard rows.count == 3, size.width > 0, size.height > 0 else { return nil }
+        guard point.x >= -dragCancellationMargin,
+              point.x <= size.width + dragCancellationMargin,
+              point.y >= -dragCancellationMargin,
+              point.y <= size.height + dragCancellationMargin
+        else {
+            return nil
+        }
         let x = min(max(point.x, 0), size.width - 0.001)
         let y = min(max(point.y, 0), size.height - 0.001)
         let column = min(2, max(0, Int(x / (size.width / 3))))
@@ -393,12 +433,19 @@ struct ModelReasoningGridPicker: View {
     }
 
     private func commit(_ candidate: GPT56ModelGridSelection, option: CodexAppServerModelOption) {
-        previewSelection = candidate
+        gestureRevision += 1
         UISelectionFeedbackGenerator().selectionChanged()
-        withAnimation(settleAnimation) {
+        withAnimation(tapSelectionAnimation) {
+            previewSelection = candidate
             dragPoint = nil
         }
         onSelect(option, candidate.effort)
+        let completedRevision = gestureRevision
+        DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0.11 : 0.24)) {
+            guard completedRevision == gestureRevision, !isDragging else { return }
+            previewSelection = nil
+            lastHapticSelection = nil
+        }
     }
 
     private func rubberBanded(_ point: CGPoint, size: CGSize) -> CGPoint {

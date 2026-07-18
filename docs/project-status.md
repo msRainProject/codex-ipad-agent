@@ -8,7 +8,7 @@
 
 Mimi Remote 的目标是让 iPhone / iPad 安全连接用户自己的 Mac，在明确授权的工作区内远程使用 Codex。项目保持单机优先：不建设云端账号系统，不把代码、Codex 凭证或完整会话托管到开发者服务器。
 
-完整源码仓库 `gaixianggeng/codex-ipad-agent` 使用 MIT License 公开 iOS App、Go 后端、测试和文档。`gaixianggeng/mimi-remote` 继续作为后端公开发布镜像，保留现有 Go Release 和 Homebrew 下载 URL；后端通过固定白名单脚本从完整仓库单向导出，避免在两个仓库手工维护代码。
+完整源码仓库 `gaixianggeng/codex-ipad-agent` 公开 iOS App、Go 后端、Claude bridge、测试和文档。自有 iOS / Go 代码使用 GNU GPLv3 并附 App Store / Google Play 分发例外；从 Alleycat 收窄导入的 `bridges/claude` 保留 GPLv3-only 和上游归属。`gaixianggeng/mimi-remote` 继续作为后端公开发布镜像，保留现有 Go Release 和 Homebrew 下载 URL；后端通过固定白名单脚本从完整仓库单向导出，避免手工维护第二份源码。
 
 ## 方案
 
@@ -46,7 +46,7 @@ iPhone / iPad SwiftUI App
 | 输入输出 | 富 Markdown、图片输入、历史图片按需加载、语音转写、文件安全读取和 QuickLook；当前会话可导出 ANSI 清洗后的有界 UTF-8 日志，导出头部不读取连接凭据 | PDF/大型 artifact 的富预览和后台下载尚未实现；日志正文可能包含用户命令、代码和工具输出，分享前需自行检查 |
 | 能力发现 | Skills 和 MCP 配置只读浏览、allowlist actions | 不在 iPad 上启停 MCP、修改 Codex 配置或处理 OAuth |
 | 移动体验 | iPhone/iPad 自适应、深浅色、主题和字号、Codex 5h/7d 用量、提醒、运行态通知、通知点击回到当前 Mac 会话、前台保持常亮；通知未授权时提醒仍可保留为 App 内状态并明确告知，冷启动/回前台清理过期提醒；通知 payload 不含 Token 或明文 endpoint，错 Mac 只提示手动切换档案；凭据失效终止重试；NWPath 事件按递增序号交付并丢弃迟到旧状态，离线暂停、恢复单次重连和 jitter 退避，首次 unknown→在线只在已有网络错误或挂起会话时恢复一次；首次配对提交后最多等待 45 秒恢复项目/会话，已有档案修复或切换等待 10 秒，超时保留 Keychain 凭据且打开设置可直接重试；保存、重命名和删除多台 Mac 档案，每台独立 Keychain Token，验证后单活切换；重命名只更新非敏感显示名，不重建连接；忘记/删除凭据必须二次确认并在执行前重验目标档案 | 后台 push、离线通知、连接档案云同步和离线队列持久化尚未实现 |
-| Claude | 外部 `alleycat-claude-bridge >= 0.2.1` 实验通道，支持审批闭环、历史记录过滤和并列额度状态入口 | 默认关闭；每个 WebSocket 一个 bridge；不支持 goal、archive、fork；Claude Code 2.1.92 headless 不执行 statusline sink，通常没有 5h/7d 百分比，只能展示 `rate_limit_event` 实际提供的重置/阻断信息或明确暂无数据；CLI 凭证失效时需在 Mac 重新登录 |
+| Claude | 仓库内 `alleycat-claude-bridge >= 0.2.1` 实验通道，支持审批闭环、历史记录过滤和并列额度状态入口 | 默认关闭；每个 WebSocket 一个 bridge；不支持 goal、archive、fork；Claude Code 2.1.92 headless 不执行 statusline sink，通常没有 5h/7d 百分比，只能展示 `rate_limit_event` 实际提供的重置/阻断信息或明确暂无数据；CLI 凭证失效时需在 Mac 重新登录 |
 
 完整能力矩阵见 [Codex Mac App 功能对照](codex-mac-feature-parity.md)。
 
@@ -78,6 +78,12 @@ iPhone / iPad SwiftUI App
 # Go
 go test ./...
 go build -o bin/agentd ./cmd/agentd
+
+# Claude bridge
+cargo test --locked \
+  -p alleycat-codex-proto \
+  -p alleycat-bridge-core \
+  -p alleycat-claude-bridge
 
 # iOS 工程
 xcodegen generate \

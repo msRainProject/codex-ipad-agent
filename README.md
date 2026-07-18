@@ -3,11 +3,11 @@
 [![iOS / iPadOS 26+](https://img.shields.io/badge/iOS%20%2F%20iPadOS-26%2B-black?logo=apple)](ios/MimiRemote/README.md)
 [![SwiftUI](https://img.shields.io/badge/SwiftUI-native-F05138?logo=swift&logoColor=white)](ios/MimiRemote)
 [![Go CI](https://github.com/gaixianggeng/codex-ipad-agent/actions/workflows/go-ci.yml/badge.svg)](https://github.com/gaixianggeng/codex-ipad-agent/actions/workflows/go-ci.yml)
-[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![GPLv3 + Store Exception](https://img.shields.io/badge/license-GPLv3%20%2B%20Store%20Exception-blue.svg)](LICENSE)
 
 **Open-source native iPhone and iPad client for OpenAI Codex CLI and Claude Code.** Control coding agents running on your own Mac, review diffs, approve actions, steer sessions, manage worktrees, and finish Git workflows without sending your source code or AI credentials through a Mimi Remote cloud service.
 
-**Mimi Remote 是一个开源的原生 iPhone / iPad AI 编程远程工作台。** 它通过 Tailscale 连接用户自己 Mac 上的 `agentd`，在明确授权的工作区内使用 Codex；Claude Code 通过可选的独立 bridge 作为实验通道接入。
+**Mimi Remote 是一个开源的原生 iPhone / iPad AI 编程远程工作台。** 它通过 Tailscale 连接用户自己 Mac 上的 `agentd`，在明确授权的工作区内使用 Codex；Claude Code 通过仓库内的可选 Rust bridge 作为实验通道接入。
 
 项目坚持本地优先：代码、Codex / Claude 凭证和完整会话都留在用户自己的开发机上，不经过项目维护者的服务器。
 
@@ -67,7 +67,7 @@ flowchart TD
 
 ### Claude Code 为什么需要单独 bridge
 
-Claude bridge 位于独立仓库 [gaixianggeng/alleycat](https://github.com/gaixianggeng/alleycat)，本仓库不复制或 vendoring 它。`agentd` 为每条 Claude WebSocket 启动一个 `alleycat-claude-bridge` 子进程，把 iOS 使用的 app-server JSON-RPC 转成 Claude Code headless 的 stdio JSONL。
+Claude bridge 位于本仓库 [`bridges/claude`](bridges/claude)，与 iOS 和 `agentd` 共用版本、CI 和发布入口。`agentd` 为每条 Claude WebSocket 启动一个 `alleycat-claude-bridge` 子进程，把 iOS 使用的 app-server JSON-RPC 转成 Claude Code headless 的 stdio JSONL。
 
 该通道默认关闭并标记为实验功能：断网、锁屏或 WebSocket 结束会终止对应 bridge，正在执行的 turn 可能中断；`goal`、`archive` 和 `fork` 尚未开放。详细生命周期、权限和失败模式见 [Claude bridge 架构](docs/claude-bridge-architecture.md)。
 
@@ -123,12 +123,11 @@ open ios/MimiRemote/MimiRemote.xcodeproj
 
 ## Claude Code 实验通道
 
-当前要求 `alleycat-claude-bridge >= 0.2.1`。安装固定到已审阅 revision：
+当前要求 `alleycat-claude-bridge >= 0.2.1`。bridge 已并入当前仓库，可以直接从同一个 GitHub 地址安装：
 
 ```bash
-cargo install --git https://github.com/gaixianggeng/alleycat.git \
-  --rev 1bb754687990a308dcc330f369820ff42d7c3289 \
-  --locked --force alleycat-claude-bridge
+cargo install --git https://github.com/gaixianggeng/codex-ipad-agent.git \
+  --locked --force --bin alleycat-claude-bridge alleycat-claude-bridge
 
 command -v alleycat-claude-bridge
 ```
@@ -196,6 +195,22 @@ xcodebuild \
 
 iOS 工程结构、Catalyst 和真机验收见 [iOS 开发说明](ios/MimiRemote/README.md)。
 
+### Claude bridge
+
+```bash
+cargo test --locked \
+  -p alleycat-codex-proto \
+  -p alleycat-bridge-core \
+  -p alleycat-claude-bridge
+
+cargo install --locked \
+  --path bridges/claude/crates/claude-bridge \
+  --force \
+  --bin alleycat-claude-bridge
+```
+
+bridge 只保留 Mimi Remote 需要的三个 crate；上游来源和 GPLv3-only 边界见 [Claude bridge 说明](bridges/claude/README.md)。
+
 ## 验证
 
 提交前至少运行：
@@ -208,15 +223,23 @@ bash ./scripts/check-public-repo-safety.sh
 bash ./scripts/check-third-party-notices.sh
 bash ./scripts/check-ios-privacy-manifest.sh
 bash ./scripts/verify-release.sh
+cargo test --locked -p alleycat-claude-bridge
 ```
 
 发布链路另外包含打包、Linux 安装、Git 历史凭据扫描、Action SHA 固定和协议漂移门禁，详见 [P0 / P1 发布清单](docs/p0-p1-roadmap.md)。
 
 ## 仓库说明
 
-- 本仓库 `gaixianggeng/codex-ipad-agent`：完整开源源码，包括 iOS App、Go `agentd`、测试、文档和本地发布脚本。
+- 本仓库 `gaixianggeng/codex-ipad-agent`：完整开源源码，包括 iOS App、Go `agentd`、Claude bridge、测试、文档和本地发布脚本。
 - [gaixianggeng/mimi-remote](https://github.com/gaixianggeng/mimi-remote)：后端公开发布镜像，承载 Go Release 和 Homebrew 下载链路。
-- [gaixianggeng/alleycat](https://github.com/gaixianggeng/alleycat)：可选 Claude Code bridge，独立版本和发布周期。
+
+源码目录保持语言和职责清晰，同时避免为目录整齐大规模改写稳定构建路径：
+
+```text
+ios/MimiRemote/          SwiftUI iPhone / iPad App
+cmd/agentd/ + internal/  Go 安全网关与 Codex / Claude 控制面
+bridges/claude/          Rust Claude Code 协议 bridge
+```
 
 保留后端发布镜像是为了不破坏已有 Homebrew / Release URL；日常功能开发以本仓库为准，后端镜像由白名单脚本单向导出。
 
@@ -232,11 +255,11 @@ bash ./scripts/verify-release.sh
 
 ### Does it support Claude Code? / 支持 Claude Code 吗？
 
-支持实验通道。`agentd` 可以调用独立的 [alleycat Claude bridge](https://github.com/gaixianggeng/alleycat)，把同一套移动端会话与审批界面连接到 Claude Code headless。该能力默认关闭，功能边界见 [Claude bridge 架构](docs/claude-bridge-architecture.md)。
+支持实验通道。`agentd` 可以调用仓库内的 [Claude bridge](bridges/claude)，把同一套移动端会话与审批界面连接到 Claude Code headless。该能力默认关闭，功能边界见 [Claude bridge 架构](docs/claude-bridge-architecture.md)。
 
 ### Is this an official OpenAI or Anthropic app? / 这是官方 App 吗？
 
-不是。Mimi Remote 是 MIT 许可的第三方开源项目，与 OpenAI、Anthropic 和 Tailscale 均无隶属或背书关系。
+不是。Mimi Remote 是采用 GNU GPLv3 并附 App Store / Google Play 分发例外的第三方开源项目，与 OpenAI、Anthropic 和 Tailscale 均无隶属或背书关系。
 
 ### Why does the app require iOS / iPadOS 26? / 为什么要求 iOS 26？
 
@@ -268,4 +291,8 @@ Mimi Remote 不包含广告、分析 SDK 或开发者自建遥测，不把项目
 
 ## License
 
-Mimi Remote 的 iOS App、Go 后端和本仓库自有代码均使用 [MIT License](LICENSE)。第三方版权与许可证正文见 [NOTICE.md](NOTICE.md) 和 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+Mimi Remote 自有的 iOS App、Go 后端和文档使用 [GNU GPLv3](LICENSE)，并依据 GPLv3 第 7 节授予通过 Apple App Store 和 Google Play 分发的额外许可。商业使用并未被禁止，但分发修改版或二进制时仍须遵守 GPLv3，包括向接收者提供对应源码和同等许可。
+
+[`bridges/claude`](bridges/claude) 源自 Alleycat 多位贡献者，保留独立的 [GPLv3-only](bridges/claude/LICENSE)；仓库根目录的商店分发额外许可不适用于这部分上游代码。
+
+此前已经明确以 MIT License 发布的历史版本继续受其原有许可；本次变更不追溯撤销已经授予的权利。第三方版权与许可证正文见 [NOTICE.md](NOTICE.md) 和 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

@@ -72,7 +72,9 @@ final class SkillModelPickerSnapshotTests: XCTestCase {
                 selection: GPT56ModelGridSelection(modelID: "gpt-5.6-terra", effort: .high),
                 selectedModelID: "gpt-5.6-terra",
                 isRefreshing: false,
+                isFastMode: true,
                 onSelect: { _, _ in },
+                onFastModeChange: { _ in },
                 onSelectModelOnly: { _ in },
                 onRefresh: {}
             )
@@ -86,6 +88,34 @@ final class SkillModelPickerSnapshotTests: XCTestCase {
         assertSnapshot(
             of: view,
             as: .image(precision: 0.98, layout: .fixed(width: 1024, height: 760))
+        )
+    }
+
+    func testCompactModelGridLightFastModeOff() {
+        let defaults = UserDefaults(suiteName: "SkillModelPickerSnapshotTests.\(UUID().uuidString)")!
+        let themeStore = ThemeStore(defaults: defaults)
+        themeStore.mode = .light
+
+        let view = ModelReasoningGridPicker(
+            options: CodexAppServerModelOption.builtInFallback,
+            selection: GPT56ModelGridSelection(modelID: "gpt-5.6-sol", effort: .xhigh),
+            selectedModelID: "gpt-5.6-sol",
+            isRefreshing: false,
+            isFastMode: false,
+            onSelect: { _, _ in },
+            onFastModeChange: { _ in },
+            onSelectModelOnly: { _ in },
+            onRefresh: {}
+        )
+        .environmentObject(themeStore)
+        .environment(\.colorScheme, .light)
+        .padding(32)
+        .frame(width: 440, height: 360, alignment: .top)
+        .background(themeStore.tokens(for: .light).background)
+
+        assertSnapshot(
+            of: view,
+            as: .image(precision: 0.98, layout: .fixed(width: 440, height: 360))
         )
     }
 }

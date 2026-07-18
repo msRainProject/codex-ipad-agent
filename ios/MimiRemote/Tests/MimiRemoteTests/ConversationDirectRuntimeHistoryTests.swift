@@ -1889,7 +1889,21 @@ extension ConversationDataFlowTests {
 
     func testQuotaNoticeRecognizesQuotaButIgnoresSkillBudgetWarning() {
         XCTAssertTrue(CodexQuotaNotice.isQuotaError("Your Codex message limit has been exhausted."))
-        XCTAssertTrue(CodexQuotaNotice.isQuotaError("HTTP 429: rate limit exceeded"))
+        XCTAssertTrue(CodexQuotaNotice.isQuotaError("You've hit your usage limit."))
+        XCTAssertFalse(CodexQuotaNotice.isQuotaError("HTTP 429: rate limit exceeded"))
+        XCTAssertFalse(CodexQuotaNotice.isQuotaError("Usage limit status is temporarily unavailable"))
+        XCTAssertTrue(CodexQuotaNotice.isRateLimitError("HTTP 429: rate limit exceeded"))
         XCTAssertFalse(CodexQuotaNotice.isQuotaError("Skill descriptions were shortened to fit the 2% skills context budget."))
+        XCTAssertFalse(CodexQuotaNotice.isRateLimitError("Skill descriptions were shortened to fit the 2% skills context budget."))
+    }
+
+    func testQuotaNoticeIgnoresExhaustedSnapshotAfterResetTime() {
+        let now = Date(timeIntervalSince1970: 1_780_490_700)
+        let staleLimit = RateLimitSummary(
+            primaryUsedPercent: 100,
+            primaryResetsAt: Int64(now.timeIntervalSince1970) - 1
+        )
+
+        XCTAssertNil(CodexQuotaNotice.make(rateLimit: staleLimit, errorMessage: nil, now: now))
     }
 }
