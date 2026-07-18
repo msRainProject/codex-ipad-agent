@@ -284,7 +284,7 @@ struct ConversationView: View {
         HStack(spacing: 8) {
             Button {
                 Task {
-                    await sessionStore.refreshCurrentContext()
+                    await sessionStore.refreshSelectedUsage()
                 }
             } label: {
                 Label("刷新状态", systemImage: "arrow.clockwise")

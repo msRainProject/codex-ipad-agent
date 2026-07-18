@@ -1244,6 +1244,28 @@ extension ConversationDataFlowTests {
         XCTAssertFalse(store.accountCodexUsageWindowsDisplay.hasLiveData)
     }
 
+    func testHealthyUsageRefreshClearsStaleQuotaError() async {
+        let client = MockSessionStoreClient(
+            projects: [],
+            sessions: [],
+            rateLimitsByRuntime: ["codex": RateLimitSummary(primaryUsedPercent: 42)]
+        )
+        let store = SessionStore(
+            appStore: AppStore(),
+            conversationStore: ConversationStore(),
+            logStore: LogStore(),
+            clientFactory: { client }
+        )
+        store.setErrorMessage("Your Codex message limit has been exhausted.")
+        XCTAssertNotNil(store.selectedQuotaNotice)
+
+        await store.refreshSelectedUsage()
+
+        XCTAssertEqual(client.requestedRateLimitProviders, ["codex"])
+        XCTAssertNil(store.errorMessage)
+        XCTAssertNil(store.selectedQuotaNotice)
+    }
+
     func testNewSessionResolvesMissingModelFromAppServerDefaultBeforeCreate() async throws {
         let project = makeProject(id: "proj_resolve_model_create")
         let created = makeSession(id: "sess_resolve_model_create", projectID: project.id, title: "模型解析", status: "running", source: "codex")
@@ -2085,4 +2107,3 @@ extension ConversationDataFlowTests {
     }
 
 }
-

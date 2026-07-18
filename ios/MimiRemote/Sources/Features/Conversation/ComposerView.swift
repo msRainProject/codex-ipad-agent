@@ -985,7 +985,11 @@ struct ComposerView: View {
                         skillPickerButton
                         modelPickerControl
                         permissionMenu
-                        reasoningEffortMenu
+                        // GPT-5.6 的九宫格已经同时负责模型和推理强度，模型按钮也会显示当前强度；
+                        // 只有其它模型仍保留独立入口，避免为了去重而丢失低频配置能力。
+                        if showsStandaloneReasoningEffortControl {
+                            reasoningEffortMenu
+                        }
                     }
                 }
                 .scrollIndicators(.hidden)
@@ -1446,8 +1450,14 @@ struct ComposerView: View {
                     selection: selectedModelGridSelection,
                     selectedModelID: composerState.turnOptions.model,
                     isRefreshing: sessionStore.isRefreshingAppServerModels,
+                    isFastMode: composerState.turnOptions.serviceTier == "priority",
                     onSelect: { option, effort in
                         selectGridModel(option, effort: effort)
+                    },
+                    onFastModeChange: { isEnabled in
+                        composerState.updateTurnOptions {
+                            $0.serviceTier = isEnabled ? "priority" : nil
+                        }
                     },
                     onSelectModelOnly: { option in
                         selectModelOnly(option)
@@ -1505,6 +1515,15 @@ struct ComposerView: View {
         let model = GPT56ModelGridCatalog.shortTitle(for: selectedModel)
         let effort = composerState.turnOptions.reasoningEffort ?? selectedModelGridSelection.effort
         return "5.6 \(model) · \(GPT56ModelGridCatalog.effortTitle(effort))"
+    }
+
+    var showsStandaloneReasoningEffortControl: Bool {
+        guard selectedSessionRuntimeProviderForModelMenu != "claude",
+              let selectedModel = composerState.turnOptions.model
+        else {
+            return true
+        }
+        return !GPT56ModelGridCatalog.modelOrder.contains(selectedModel.lowercased())
     }
 
     func selectGridModel(_ option: CodexAppServerModelOption, effort: CodexAppServerReasoningEffort) {

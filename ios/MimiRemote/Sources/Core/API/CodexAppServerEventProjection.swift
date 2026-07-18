@@ -356,7 +356,8 @@ extension CodexAppServerSessionRuntime {
     }
 
     func refreshRateLimitAfterQuotaError(_ error: Error) async {
-        guard CodexQuotaNotice.isQuotaError(error.localizedDescription) else {
+        // 瞬时 429 也值得刷新账号状态，但刷新动作本身不等于确认额度耗尽。
+        guard CodexQuotaNotice.isRateLimitError(error.localizedDescription) else {
             return
         }
         _ = await refreshRateLimitIfAvailable()
