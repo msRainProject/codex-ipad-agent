@@ -12,9 +12,13 @@ Mimi Remote 是独立开发的第三方客户端。它连接用户自己 Mac 上
 
 ## 开源许可
 
-本仓库使用 MIT License 发布，完整条款见 [LICENSE](LICENSE)。
+Copyright (c) 2026 Gaixiang Geng
 
-MIT 许可允许使用、修改和分发代码，但分发本项目或其重要部分时，需要保留原始版权声明和许可证文本。
+本仓库自有的 iOS App、Go 后端和文档使用 GNU GPLv3，并依据 GPLv3 第 7 节授予通过 Apple App Store 和 Google Play 分发的额外许可。完整条款见 [LICENSE](LICENSE)。
+
+商业使用并未被禁止，但分发修改版或二进制时仍须遵守 GPLv3，包括保留版权与许可声明、标记修改，并向接收者提供对应源码和同等许可。此前已经明确以 MIT License 发布的历史版本继续受其原有许可。
+
+[`bridges/claude`](bridges/claude) 源自 Alleycat 多位贡献者，按 [GPLv3-only](bridges/claude/LICENSE) 分发。根目录中的 App Store / Google Play 额外许可只由 Mimi Remote 自有代码的 copyright holders 授予，不适用于其他上游贡献者拥有版权的 bridge 代码。具体来源和导入 commit 见 [UPSTREAM.md](bridges/claude/UPSTREAM.md)。
 
 ## 第三方依赖
 
@@ -43,7 +47,7 @@ Swift Package Manager 依赖：
 运行时外部工具：
 
 - 用户本机自行安装和登录的 Codex CLI / app-server。
-- 用户显式启用实验通道时，自行安装和登录的 Claude Code，以及独立开源仓库提供的 `alleycat-claude-bridge`。
+- 用户显式启用实验通道时，自行安装和登录的 Claude Code；`alleycat-claude-bridge` 源码位于本仓库 `bridges/claude`。
 
 本仓库不打包用户的 Codex 凭证，也不托管第三方服务账号。
 

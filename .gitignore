@@ -15,6 +15,9 @@ config.json
 bin/
 /dist/
 
+# Rust / Claude bridge build output
+/target/
+
 # Xcode and Swift build output
 DerivedData/
 .build/

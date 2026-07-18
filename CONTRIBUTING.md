@@ -46,6 +46,16 @@ xcodebuild \
   build-for-testing
 ```
 
+Claude bridge 改动至少运行：
+
+```bash
+cargo fmt --all -- --check
+cargo test --locked \
+  -p alleycat-codex-proto \
+  -p alleycat-bridge-core \
+  -p alleycat-claude-bridge
+```
+
 公开仓库安全相关改动还应运行：
 
 ```bash

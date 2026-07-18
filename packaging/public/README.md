@@ -85,12 +85,11 @@ agentd stop
 
 ### Claude Code 可选通道
 
-Claude 通道需要 `alleycat-claude-bridge >= 0.2.1`。为确保包含移动端审批和历史记录过滤修复，请安装已审阅的不可变 revision：
+Claude 通道需要 `alleycat-claude-bridge >= 0.2.1`。bridge 与完整 Mimi Remote 源码同仓维护：
 
 ```bash
-cargo install --git https://github.com/gaixianggeng/alleycat.git \
-  --rev 1bb754687990a308dcc330f369820ff42d7c3289 \
-  --locked --force alleycat-claude-bridge
+cargo install --git https://github.com/gaixianggeng/codex-ipad-agent.git \
+  --locked --force --bin alleycat-claude-bridge alleycat-claude-bridge
 
 command -v alleycat-claude-bridge
 ```
@@ -131,4 +130,4 @@ bash ./scripts/verify-release.sh
 - `danger-full-access` 只适合用户自己的受信开发机；审批策略仍应保持 `on-request`。
 - 多用户、云同步、任意 Shell 和公网 SaaS 不属于当前范围。
 
-安全问题请按 [安全政策](SECURITY.md) 私下报告。项目使用 [MIT License](LICENSE)，第三方归属和许可证正文见 [NOTICE.md](NOTICE.md) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+安全问题请按 [安全政策](SECURITY.md) 私下报告。项目使用 [GNU GPLv3](LICENSE)，并附 App Store / Google Play 分发例外；第三方归属和许可证正文见 [NOTICE.md](NOTICE.md) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
